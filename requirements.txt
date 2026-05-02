@@ -1,0 +1,14 @@
+Flask==3.0.0
+Flask-Login==0.6.3
+Flask-Cors==4.0.0
+pyodbc==5.1.0
+python-dotenv==1.0.0
+gunicorn==23.0.0
+Werkzeug==3.1.5
+Jinja2==3.1.6
+requests==2.31.0
+sendgrid==6.11.0
+openpyxl==3.1.2
+pdfkit==1.0.0
+paramiko>=3.0.0
+pysftp==0.2.9

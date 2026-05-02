@@ -1,0 +1,27 @@
+{% extends "layout.html" %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block extra_css %}
+<style>
+    .dashboard-welcome {
+        background: linear-gradient(135deg, var(--sidebar-bg) 0%, #334155 100%);
+        color: white;
+        padding: 2rem;
+        border-radius: 12px;
+        margin-bottom: 2rem;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-4">
+    <div class="dashboard-welcome">
+        <h2 class="mb-2 fw-bold">Bienvenido, {{ current_user.username }}</h2>
+        <p class="mb-0 opacity-75">
+            Portal Planillas. Las acciones del menú lateral se irán habilitando conforme avance el proyecto.
+        </p>
+    </div>
+</div>
+{% endblock %}

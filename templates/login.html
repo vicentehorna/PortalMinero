@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Planillas - Acceso</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="login-page">
+    <div class="login-card">
+        <div class="d-flex justify-content-center">
+            <div class="logo-container">
+                <img src="{{ url_for('static', filename='img/logo_login.png') }}"
+                     alt="Logo Planillas"
+                     class="img-fluid rounded-4 shadow-sm"
+                     style="width: 85px; height: 85px; object-fit: cover;">
+            </div>
+        </div>
+
+        <div class="text-center mb-4">
+            <h2 class="fw-bold m-0" style="color: #334155;">Sistema de <span style="color: #38bdf8;">Planillas</span></h2>
+            <p class="text-muted small" id="card-subtitle">Bienvenido. Por favor, identifíquese.</p>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} py-2 small mb-3 text-center border-0 shadow-sm {% if category == 'success' %}alert-success{% elif category == 'danger' or category == 'error' %}alert-error{% else %}login-alert{% endif %}" role="alert">
+                        {% if category == 'success' %}
+                            <i class="fas fa-check-circle me-1"></i>
+                        {% else %}
+                            <i class="fas fa-exclamation-circle me-1"></i>
+                        {% endif %}
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <div id="login-block">
+            <form method="POST" action="{{ url_for('login_post') }}" class="login-form">
+                <div class="input-group-custom">
+                    <label>Usuario / DNI</label>
+                    <div class="input-wrapper">
+                        <i class="fas fa-user"></i>
+                        <input type="text" name="username" placeholder="Ej: 44556677" required autofocus>
+                    </div>
+                </div>
+
+                <div class="input-group-custom">
+                    <label>Contraseña</label>
+                    <div class="input-wrapper">
+                        <i class="fas fa-lock"></i>
+                        <input type="password" name="password" id="login_pass" placeholder="••••••••" required>
+                        <button type="button" class="toggle-password" onclick="togglePassword('login_pass')">
+                            <i class="fas fa-eye" id="eye-login_pass"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <button type="submit" class="btn-login" id="btnLogin">
+                    <span>Ingresar al Sistema</span>
+                    <i class="fas fa-sign-in-alt"></i>
+                </button>
+            </form>
+
+            <div class="text-center mt-3">
+                <a href="#" onclick="showChangePassword(); return false;" class="small text-decoration-none change-link">
+                    <i class="fas fa-key me-1"></i> Cambiar mi contraseña
+                </a>
+            </div>
+        </div>
+
+        <div id="change-password-block" style="display: none;">
+            <form method="POST" action="{{ url_for('change_password_route') }}">
+                <div class="input-group-custom">
+                    <label>Usuario</label>
+                    <div class="input-wrapper">
+                        <i class="fas fa-user"></i>
+                        <input type="text" name="username" placeholder="Su Usuario" required>
+                    </div>
+                </div>
+
+                <div class="input-group-custom">
+                    <label>Contraseña Anterior</label>
+                    <div class="input-wrapper">
+                        <i class="fas fa-unlock"></i>
+                        <input type="password" name="old_password" id="old_pass" placeholder="Contraseña Anterior" required>
+                        <button type="button" class="toggle-password" onclick="togglePassword('old_pass')">
+                            <i class="fas fa-eye" id="eye-old_pass"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="input-group-custom">
+                    <label>Nueva Contraseña</label>
+                    <div class="input-wrapper">
+                        <i class="fas fa-lock"></i>
+                        <input type="password" name="new_password" id="new_pass" placeholder="Nueva Contraseña" required>
+                        <button type="button" class="toggle-password" onclick="togglePassword('new_pass')">
+                            <i class="fas fa-eye" id="eye-new_pass"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="input-group-custom">
+                    <label>Confirmar Nueva Contraseña</label>
+                    <div class="input-wrapper">
+                        <i class="fas fa-check-circle"></i>
+                        <input type="password" name="confirm_password" id="conf_pass" placeholder="Confirmar Nueva" required>
+                    </div>
+                </div>
+
+                <button type="submit" class="btn-login w-100 mb-3" style="background-color: #475569;">
+                    ACTUALIZAR <i class="fas fa-save ms-2"></i>
+                </button>
+
+                <div class="text-center">
+                    <button type="button" onclick="showLogin()" class="btn btn-link btn-sm text-decoration-none text-muted">
+                        <i class="fas fa-arrow-left me-1"></i> Volver al Login
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        function showChangePassword() {
+            document.getElementById('login-block').style.display = 'none';
+            document.getElementById('change-password-block').style.display = 'block';
+            document.getElementById('card-subtitle').innerText = "Gestión de Seguridad";
+            document.querySelectorAll('#change-password-block input').forEach(i => i.value = '');
+        }
+
+        function showLogin() {
+            document.getElementById('change-password-block').style.display = 'none';
+            document.getElementById('login-block').style.display = 'block';
+            document.getElementById('card-subtitle').innerText = "Bienvenido. Por favor, identifíquese.";
+        }
+
+        document.querySelector('.login-form')?.addEventListener('submit', function() {
+            const btn = document.getElementById('btnLogin');
+            if (btn) {
+                btn.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> Validando...';
+                btn.style.opacity = '0.8';
+                btn.style.pointerEvents = 'none';
+            }
+        });
+
+        function togglePassword(inputId) {
+            const input = document.getElementById(inputId);
+            const iconId = 'eye-' + inputId;
+            const icon = document.getElementById(iconId);
+            if (input.type === "password") {
+                input.type = "text";
+                icon.classList.remove('fa-eye');
+                icon.classList.add('fa-eye-slash');
+            } else {
+                input.type = "password";
+                icon.classList.remove('fa-eye-slash');
+                icon.classList.add('fa-eye');
+            }
+        }
+    </script>
+
+    <style>
+        .change-link { color: #64748b; }
+        .change-link:hover { color: var(--accent-color) !important; text-decoration: underline !important; }
+        #login-block, #change-password-block { animation: fadeIn 0.4s ease-in-out; }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</body>
+</html>

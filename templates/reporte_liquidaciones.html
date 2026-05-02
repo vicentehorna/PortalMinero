@@ -1,0 +1,496 @@
+{% extends "layout.html" %}
+
+{% block title %}Promedio de Liquidaciones{% endblock %}
+
+{% block extra_css %}
+<style>
+    #tblBody tr.reporte-fila-totales td {
+        background-color: #d9edf7;
+        font-weight: 700;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="card shadow-sm border-0 mb-4">
+    <div class="card-header bg-white border-bottom-0 pt-4 pb-0">
+        <h5 class="mb-0 fw-bold text-secondary"><i class="bi bi-funnel"></i> Filtros del Reporte</h5>
+    </div>
+    <div class="card-body">
+        <form id="frmFiltros" class="row g-3">
+            <div class="col-md-3">
+                <label for="cboCompania" class="form-label small fw-bold text-muted">Compañía</label>
+                <select id="cboCompania" class="form-select form-select-sm" required>
+                    <option value="">Seleccione...</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label for="cboTipoPlanilla" class="form-label small fw-bold text-muted">Tipo Planilla</label>
+                <select id="cboTipoPlanilla" class="form-select form-select-sm" required disabled>
+                    <option value="">Seleccione...</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label for="cboProceso" class="form-label small fw-bold text-muted">Proceso</label>
+                <select id="cboProceso" class="form-select form-select-sm" required disabled>
+                    <option value="">Seleccione...</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label for="cboPeriodo" class="form-label small fw-bold text-muted">Periodo</label>
+                <select id="cboPeriodo" class="form-select form-select-sm" required disabled>
+                    <option value="">Seleccione...</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label for="cboTrabajador" class="form-label small fw-bold text-muted">Empleado</label>
+                <select id="cboTrabajador" class="form-select form-select-sm" required disabled>
+                    <option value="">Seleccione...</option>
+                </select>
+            </div>
+            <div class="col-12 d-flex gap-2 border-top pt-3 mt-3">
+                <button type="submit" class="btn btn-primary btn-sm px-4"><i class="bi bi-search"></i> Buscar</button>
+                <button type="button" class="btn btn-success btn-sm px-4" id="btnExportExcel" disabled><i class="bi bi-file-earmark-excel"></i> Exportar a Excel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card shadow-sm border-0 d-none" id="reportContainer">
+    <div class="card-body">
+        <h4 class="text-center fw-bold mb-4">REPORTE DETALLE DE LIQUIDACIÓN</h4>
+
+        <div class="d-flex justify-content-between mb-3 fw-bold" style="font-size: 0.9rem;" id="headerInfo">
+            <span id="lblNombre"></span>
+            <span id="lblIngreso"></span>
+            <span id="lblCese"></span>
+        </div>
+
+        <div class="table-responsive">
+            <table class="table table-bordered table-sm table-hover text-center align-middle" style="font-size: 0.85rem;">
+                <thead class="table-light">
+                    <tr>
+                        <th rowspan="2" class="align-middle">Periodo</th>
+                        <th colspan="5" class="bg-warning bg-opacity-10">Vacaciones</th>
+                        <th colspan="5" class="bg-success bg-opacity-10">CTS</th>
+                        <th colspan="5" class="bg-info bg-opacity-10">Gratificaciones</th>
+                    </tr>
+                    <tr>
+                        <th class="bg-warning bg-opacity-10">Horas Ex</th>
+                        <th class="bg-warning bg-opacity-10">Bono</th>
+                        <th class="bg-warning bg-opacity-10">Feriado</th>
+                        <th class="bg-warning bg-opacity-10">Comisión</th>
+                        <th class="bg-warning bg-opacity-10">Faltas</th>
+                        <th class="bg-success bg-opacity-10">Horas Ex</th>
+                        <th class="bg-success bg-opacity-10">Bono</th>
+                        <th class="bg-success bg-opacity-10">Feriado</th>
+                        <th class="bg-success bg-opacity-10">Comisión</th>
+                        <th class="bg-success bg-opacity-10">Faltas</th>
+                        <th class="bg-info bg-opacity-10">Horas Ex</th>
+                        <th class="bg-info bg-opacity-10">Bono</th>
+                        <th class="bg-info bg-opacity-10">Feriado</th>
+                        <th class="bg-info bg-opacity-10">Comisión</th>
+                        <th class="bg-info bg-opacity-10">Faltas</th>
+                    </tr>
+                </thead>
+                <tbody id="tblBody">
+                </tbody>
+            </table>
+        </div>
+        <div class="mt-2 text-muted small fw-bold">
+            No. de Registros: <span id="lblRowCount">0</span>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+
+    const COLUMNAS_NUMERICAS = [
+        'he_vac', 'bono_vac', 'feriado_vac', 'comision_vac', 'faltas_vac',
+        'he_cts', 'bono_cts', 'feriado_cts', 'comision_cts', 'faltas_cts',
+        'he_gra', 'bono_gra', 'feriado_gra', 'comision_gra', 'faltas_gra'
+    ];
+
+    const EXCEL_HEADER = [
+        'Periodo',
+        'Horas Ex Vac', 'Bono Vac', 'Feriado Vac', 'Comisión Vac', 'Faltas Vac',
+        'Horas Ex CTS', 'Bono CTS', 'Feriado CTS', 'Comisión CTS', 'Faltas CTS',
+        'Horas Ex Grat', 'Bono Grat', 'Feriado Grat', 'Comisión Grat', 'Faltas Grat'
+    ];
+
+    let lastPromedioExport = null;
+
+    const num = (v) => Number(v == null ? 0 : v);
+    const fmt = (v) => Number(v == null ? 0 : v).toFixed(2);
+    const periodoCell = (row) => row.periodo_fmt || row[''] || '';
+
+    const pickMeses = (row, candidatos) => {
+        if (!row) return 0;
+        for (const nombre of candidatos) {
+            if (row[nombre] != null && row[nombre] !== '') return num(row[nombre]);
+        }
+        const claves = Object.keys(row);
+        for (const nombre of candidatos) {
+            const k = claves.find((c) => c.toLowerCase() === nombre.toLowerCase());
+            if (k != null && row[k] != null && row[k] !== '') return num(row[k]);
+        }
+        return 0;
+    };
+
+    function computeResumenPromedio(data) {
+        const totales = COLUMNAS_NUMERICAS.map((key) =>
+            data.reduce((acc, row) => acc + num(row[key]), 0)
+        );
+        const cantidades = COLUMNAS_NUMERICAS.map((key) =>
+            data.reduce((acc, row) => acc + (num(row[key]) > 0 ? 1 : 0), 0)
+        );
+        const r0 = data[0];
+        const mesesVac = pickMeses(r0, ['vaccant']);
+        const mesesCts = pickMeses(r0, ['ctsCant', 'ctscant']);
+        const mesesGra = pickMeses(r0, ['gratiCant', 'graticant']);
+        const divPorIndice = (i) => {
+            if (i < 5) return mesesVac;
+            if (i < 10) return mesesCts;
+            return mesesGra;
+        };
+        const promedios = COLUMNAS_NUMERICAS.map((_, i) => {
+            const c = cantidades[i];
+            const t = totales[i];
+            const d = divPorIndice(i);
+            if (c > 2 && Number.isFinite(d) && d !== 0) {
+                return Number((t / d).toFixed(2));
+            }
+            return 0;
+        });
+        return { totales, cantidades, mesesVac, mesesCts, mesesGra, promedios };
+    }
+
+    function renderPromedioTabla(data, resumen, tbody) {
+        tbody.innerHTML = '';
+        const { totales, cantidades, mesesVac, mesesCts, mesesGra, promedios } = resumen;
+
+        data.forEach(row => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td class="fw-bold bg-light">${periodoCell(row)}</td>
+                <td>${fmt(row.he_vac)}</td><td>${fmt(row.bono_vac)}</td><td>${fmt(row.feriado_vac)}</td><td>${fmt(row.comision_vac)}</td><td>${fmt(row.faltas_vac)}</td>
+                <td>${fmt(row.he_cts)}</td><td>${fmt(row.bono_cts)}</td><td>${fmt(row.feriado_cts)}</td><td>${fmt(row.comision_cts)}</td><td>${fmt(row.faltas_cts)}</td>
+                <td>${fmt(row.he_gra)}</td><td>${fmt(row.bono_gra)}</td><td>${fmt(row.feriado_gra)}</td><td>${fmt(row.comision_gra)}</td><td>${fmt(row.faltas_gra)}</td>
+            `;
+            tbody.appendChild(tr);
+        });
+
+        const trTot = document.createElement('tr');
+        trTot.className = 'reporte-fila-totales';
+        trTot.innerHTML = `<td class="text-start">Totales</td>${totales.map((t) => `<td>${fmt(t)}</td>`).join('')}`;
+        tbody.appendChild(trTot);
+
+        const trCant = document.createElement('tr');
+        trCant.className = 'reporte-fila-totales';
+        trCant.innerHTML = `<td class="text-start">Cantidad</td>${cantidades.map((c) => `<td>${c}</td>`).join('')}`;
+        tbody.appendChild(trCant);
+
+        const cincoInt = (v) => {
+            const n = Math.round(num(v));
+            return Array(5).fill(`<td>${Number.isFinite(n) ? n : 0}</td>`).join('');
+        };
+        const trMes = document.createElement('tr');
+        trMes.className = 'reporte-fila-totales';
+        trMes.innerHTML = `<td class="text-start">Meses Div</td>${cincoInt(mesesVac)}${cincoInt(mesesCts)}${cincoInt(mesesGra)}`;
+        tbody.appendChild(trMes);
+
+        const trProm = document.createElement('tr');
+        trProm.className = 'reporte-fila-totales';
+        trProm.innerHTML = `<td class="text-start">Promedio</td>${promedios.map((p) => `<td>${fmt(p)}</td>`).join('')}`;
+        tbody.appendChild(trProm);
+    }
+
+    async function exportPromedioExcel(data, resumen) {
+        if (typeof ExcelJS === 'undefined') {
+            alert('No se pudo cargar la librería de Excel (ExcelJS). Recargue la página e intente de nuevo.');
+            return;
+        }
+        const { totales, cantidades, mesesVac, mesesCts, mesesGra, promedios } = resumen;
+        const NCOLS = EXCEL_HEADER.length;
+
+        const F = {
+            periodo: 'FFF8F9FA',
+            vac: 'FFFFF3CD',
+            cts: 'FFD1E7DD',
+            grat: 'FFCFF4FC',
+            resumen: 'FFD9EDF7',
+            title: 'FFE9ECEF',
+            meta: 'FFF8F9FA'
+        };
+        const fill = (argb) => ({ type: 'pattern', pattern: 'solid', fgColor: { argb } });
+        const borderThin = { style: 'thin', color: { argb: 'FFCCCCCC' } };
+        const allBorders = { top: borderThin, left: borderThin, bottom: borderThin, right: borderThin };
+        const alignCenter = { horizontal: 'center', vertical: 'middle' };
+
+        const fillPorColumna = (col) => {
+            if (col === 1) return F.periodo;
+            if (col >= 2 && col <= 6) return F.vac;
+            if (col >= 7 && col <= 11) return F.cts;
+            return F.grat;
+        };
+
+        const wb = new ExcelJS.Workbook();
+        const ws = wb.addWorksheet('Promedio Liq', { views: [{ showGridLines: true }] });
+
+        let rowIdx = 1;
+        ws.mergeCells(rowIdx, 1, rowIdx, NCOLS);
+        const titleCell = ws.getCell(rowIdx, 1);
+        titleCell.value = 'REPORTE DETALLE DE LIQUIDACIÓN';
+        titleCell.font = { bold: true, size: 14 };
+        titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+        titleCell.fill = fill(F.title);
+        titleCell.border = allBorders;
+        ws.getRow(rowIdx).height = 26;
+        rowIdx++;
+
+        const meta = ws.addRow([
+            'Empleado', data[0].Name || '',
+            'F. Ingreso', data[0].fechaingreso || '',
+            'F. Cese', data[0].fechacese || ''
+        ]);
+        meta.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+            if (colNumber <= 6) {
+                cell.fill = fill(F.meta);
+                cell.font = { bold: colNumber % 2 === 1 };
+                cell.alignment = alignCenter;
+            }
+            cell.border = allBorders;
+        });
+        rowIdx++;
+
+        ws.addRow([]);
+        rowIdx++;
+
+        const hRow = ws.addRow(EXCEL_HEADER);
+        hRow.font = { bold: true };
+        hRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+            cell.fill = fill(fillPorColumna(colNumber));
+            cell.alignment = alignCenter;
+            cell.border = allBorders;
+        });
+        rowIdx++;
+
+        data.forEach((drow) => {
+            const vals = [periodoCell(drow), ...COLUMNAS_NUMERICAS.map((k) => num(drow[k]))];
+            const r = ws.addRow(vals);
+            r.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+                cell.fill = fill(fillPorColumna(colNumber));
+                cell.alignment = alignCenter;
+                cell.border = allBorders;
+                if (colNumber > 1) {
+                    cell.numFmt = '#,##0.00';
+                } else {
+                    cell.font = { bold: true };
+                }
+            });
+            rowIdx++;
+        });
+
+        const addResumen = (label, valores, numFmtDec) => {
+            const r = ws.addRow([label, ...valores]);
+            r.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+                cell.fill = fill(F.resumen);
+                cell.font = { bold: true };
+                cell.alignment = colNumber === 1 ? { horizontal: 'left', vertical: 'middle' } : alignCenter;
+                cell.border = allBorders;
+                if (colNumber > 1) {
+                    cell.numFmt = numFmtDec ? '#,##0.00' : '0';
+                }
+            });
+            rowIdx++;
+        };
+
+        addResumen('Totales', totales, true);
+        addResumen('Cantidad', cantidades, false);
+        addResumen('Meses Div', [
+            ...Array(5).fill(Math.round(num(mesesVac))),
+            ...Array(5).fill(Math.round(num(mesesCts))),
+            ...Array(5).fill(Math.round(num(mesesGra)))
+        ], false);
+        addResumen('Promedio', promedios, true);
+
+        ws.getColumn(1).width = 18;
+        for (let c = 2; c <= NCOLS; c++) {
+            ws.getColumn(c).width = 14;
+        }
+
+        const buffer = await wb.xlsx.writeBuffer();
+        const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const safe = (s) => String(s || 'export').replace(/[\\/:*?"<>|]+/g, '_').trim().slice(0, 80);
+        const stamp = new Date().toISOString().slice(0, 10);
+        a.download = `promedio_liquidaciones_${safe(data[0].Name)}_${stamp}.xlsx`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+    }
+
+    const poblarSelect = async (url, selectElement) => {
+        selectElement.innerHTML = '';
+        const loading = document.createElement('option');
+        loading.value = '';
+        loading.textContent = 'Cargando...';
+        selectElement.appendChild(loading);
+        try {
+            const res = await fetch(url);
+            const data = await res.json();
+            selectElement.innerHTML = '';
+            const def = document.createElement('option');
+            def.value = '';
+            def.textContent = 'Seleccione...';
+            selectElement.appendChild(def);
+            (Array.isArray(data) ? data : []).forEach(item => {
+                const opt = document.createElement('option');
+                opt.value = item.id != null ? String(item.id) : '';
+                opt.textContent = item.text != null ? String(item.text) : '';
+                selectElement.appendChild(opt);
+            });
+            selectElement.disabled = false;
+        } catch (error) {
+            console.error("Error cargando datos:", error);
+            selectElement.innerHTML = '<option value="">Error</option>';
+        }
+    };
+
+    poblarSelect('/api/selectores/companias', document.getElementById('cboCompania'));
+
+    document.getElementById('cboCompania').addEventListener('change', function() {
+        const cia = this.value;
+        const cboPlanilla = document.getElementById('cboTipoPlanilla');
+        const cboTrabajador = document.getElementById('cboTrabajador');
+
+        document.getElementById('cboProceso').innerHTML = '<option value="">Seleccione...</option>';
+        document.getElementById('cboProceso').disabled = true;
+        document.getElementById('cboPeriodo').innerHTML = '<option value="">Seleccione...</option>';
+        document.getElementById('cboPeriodo').disabled = true;
+
+        if (cia) {
+            poblarSelect(`/api/selectores/planillas?cia=${encodeURIComponent(cia)}`, cboPlanilla);
+            poblarSelect(`/api/selectores/trabajadores?cia=${encodeURIComponent(cia)}`, cboTrabajador);
+        } else {
+            cboPlanilla.innerHTML = '<option value="">Seleccione...</option>';
+            cboPlanilla.disabled = true;
+            cboTrabajador.innerHTML = '<option value="">Seleccione...</option>';
+            cboTrabajador.disabled = true;
+        }
+    });
+
+    document.getElementById('cboTipoPlanilla').addEventListener('change', function() {
+        const cia = document.getElementById('cboCompania').value;
+        const pt = this.value;
+        const cboProceso = document.getElementById('cboProceso');
+
+        document.getElementById('cboPeriodo').innerHTML = '<option value="">Seleccione...</option>';
+        document.getElementById('cboPeriodo').disabled = true;
+
+        if (pt) {
+            poblarSelect(
+                `/api/selectores/procesos?cia=${encodeURIComponent(cia)}&payrolltype=${encodeURIComponent(pt)}`,
+                cboProceso
+            );
+        } else {
+            cboProceso.innerHTML = '<option value="">Seleccione...</option>';
+            cboProceso.disabled = true;
+        }
+    });
+
+    document.getElementById('cboProceso').addEventListener('change', function() {
+        const cia = document.getElementById('cboCompania').value;
+        const pt = document.getElementById('cboTipoPlanilla').value;
+        const proc = this.value;
+        const cboPeriodo = document.getElementById('cboPeriodo');
+
+        if (proc) {
+            poblarSelect(
+                `/api/selectores/periodos?cia=${encodeURIComponent(cia)}&payrolltype=${encodeURIComponent(pt)}&processtype=${encodeURIComponent(proc)}`,
+                cboPeriodo
+            );
+        } else {
+            cboPeriodo.innerHTML = '<option value="">Seleccione...</option>';
+            cboPeriodo.disabled = true;
+        }
+    });
+
+    document.getElementById('frmFiltros').addEventListener('submit', async function(e) {
+        e.preventDefault();
+
+        const payload = {
+            cia: document.getElementById('cboCompania').value.trim(),
+            payrolltype: document.getElementById('cboTipoPlanilla').value.trim(),
+            period: document.getElementById('cboPeriodo').value.trim(),
+            person: document.getElementById('cboTrabajador').value.trim()
+        };
+
+        try {
+            const res = await fetch('/api/reportes/promedio-liquidaciones', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const data = await res.json();
+
+            const tbody = document.getElementById('tblBody');
+            tbody.innerHTML = '';
+
+            if (!Array.isArray(data)) {
+                lastPromedioExport = null;
+                document.getElementById('btnExportExcel').disabled = true;
+                alert("Respuesta inválida del servidor.");
+                document.getElementById('reportContainer').classList.add('d-none');
+                return;
+            }
+
+            if (data.length > 0) {
+                document.getElementById('lblNombre').innerText = data[0].Name;
+                document.getElementById('lblIngreso').innerText = 'F. Ingreso: ' + data[0].fechaingreso;
+                document.getElementById('lblCese').innerText = 'F. Cese: ' + data[0].fechacese;
+                document.getElementById('lblRowCount').innerText = data.length;
+
+                const resumen = computeResumenPromedio(data);
+                renderPromedioTabla(data, resumen, tbody);
+                lastPromedioExport = { data, resumen };
+                document.getElementById('btnExportExcel').disabled = false;
+
+                document.getElementById('reportContainer').classList.remove('d-none');
+            } else {
+                lastPromedioExport = null;
+                document.getElementById('btnExportExcel').disabled = true;
+                alert("No se encontraron registros para los filtros seleccionados.");
+                document.getElementById('reportContainer').classList.add('d-none');
+            }
+
+        } catch (error) {
+            console.error("Error al generar reporte:", error);
+            lastPromedioExport = null;
+            document.getElementById('btnExportExcel').disabled = true;
+            alert("Ocurrió un error al consultar el reporte.");
+        }
+    });
+
+    document.getElementById('btnExportExcel').addEventListener('click', async function () {
+        if (!lastPromedioExport || !lastPromedioExport.data || !lastPromedioExport.data.length) {
+            alert('Ejecute primero una búsqueda con resultados.');
+            return;
+        }
+        try {
+            await exportPromedioExcel(lastPromedioExport.data, lastPromedioExport.resumen);
+        } catch (err) {
+            console.error(err);
+            alert('No se pudo generar el archivo Excel.');
+        }
+    });
+});
+</script>
+{% endblock %}
