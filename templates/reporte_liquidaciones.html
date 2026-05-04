@@ -105,9 +105,13 @@
 {% endblock %}
 
 {% block extra_js %}
+<script src="{{ url_for('static', filename='js/filtros_reportes_planillas.js') }}"></script>
 <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 <script>
-document.addEventListener("DOMContentLoaded", function() {
+document.addEventListener("DOMContentLoaded", async function() {
+    const filtrosPersist = window.FiltrosPlanillasReportes && window.FiltrosPlanillasReportes.promedioLiquidaciones
+        ? window.FiltrosPlanillasReportes.promedioLiquidaciones()
+        : null;
 
     const COLUMNAS_NUMERICAS = [
         'he_vac', 'bono_vac', 'feriado_vac', 'comision_vac', 'faltas_vac',
@@ -337,6 +341,61 @@ document.addEventListener("DOMContentLoaded", function() {
         window.URL.revokeObjectURL(url);
     }
 
+    async function ejecutarConsultaPromedio() {
+        if (filtrosPersist) filtrosPersist.guardar();
+        const payload = {
+            cia: document.getElementById('cboCompania').value.trim(),
+            payrolltype: document.getElementById('cboTipoPlanilla').value.trim(),
+            period: document.getElementById('cboPeriodo').value.trim(),
+            person: document.getElementById('cboTrabajador').value.trim()
+        };
+
+        try {
+            const res = await fetch('/api/reportes/promedio-liquidaciones', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const data = await res.json();
+
+            const tbody = document.getElementById('tblBody');
+            tbody.innerHTML = '';
+
+            if (!Array.isArray(data)) {
+                lastPromedioExport = null;
+                document.getElementById('btnExportExcel').disabled = true;
+                alert("Respuesta inválida del servidor.");
+                document.getElementById('reportContainer').classList.add('d-none');
+                return;
+            }
+
+            if (data.length > 0) {
+                document.getElementById('lblNombre').innerText = data[0].Name;
+                document.getElementById('lblIngreso').innerText = 'F. Ingreso: ' + data[0].fechaingreso;
+                document.getElementById('lblCese').innerText = 'F. Cese: ' + data[0].fechacese;
+                document.getElementById('lblRowCount').innerText = data.length;
+
+                const resumen = computeResumenPromedio(data);
+                renderPromedioTabla(data, resumen, tbody);
+                lastPromedioExport = { data, resumen };
+                document.getElementById('btnExportExcel').disabled = false;
+
+                document.getElementById('reportContainer').classList.remove('d-none');
+            } else {
+                lastPromedioExport = null;
+                document.getElementById('btnExportExcel').disabled = true;
+                alert("No se encontraron registros para los filtros seleccionados.");
+                document.getElementById('reportContainer').classList.add('d-none');
+            }
+
+        } catch (error) {
+            console.error("Error al generar reporte:", error);
+            lastPromedioExport = null;
+            document.getElementById('btnExportExcel').disabled = true;
+            alert("Ocurrió un error al consultar el reporte.");
+        }
+    }
+
     const poblarSelect = async (url, selectElement) => {
         selectElement.innerHTML = '';
         const loading = document.createElement('option');
@@ -364,7 +423,17 @@ document.addEventListener("DOMContentLoaded", function() {
         }
     };
 
-    poblarSelect('/api/selectores/companias', document.getElementById('cboCompania'));
+    await poblarSelect('/api/selectores/companias', document.getElementById('cboCompania'));
+    if (filtrosPersist) {
+        await filtrosPersist.aplicarRestauracionCascada({ poblarSelect });
+        const cia = document.getElementById('cboCompania').value.trim();
+        const pt = document.getElementById('cboTipoPlanilla').value.trim();
+        const period = document.getElementById('cboPeriodo').value.trim();
+        const person = document.getElementById('cboTrabajador').value.trim();
+        if (cia && pt && period && person) {
+            await ejecutarConsultaPromedio();
+        }
+    }
 
     document.getElementById('cboCompania').addEventListener('change', function() {
         const cia = this.value;
@@ -423,60 +492,13 @@ document.addEventListener("DOMContentLoaded", function() {
         }
     });
 
+    if (filtrosPersist) {
+        filtrosPersist.registrarGuardadoEnCambio();
+    }
+
     document.getElementById('frmFiltros').addEventListener('submit', async function(e) {
         e.preventDefault();
-
-        const payload = {
-            cia: document.getElementById('cboCompania').value.trim(),
-            payrolltype: document.getElementById('cboTipoPlanilla').value.trim(),
-            period: document.getElementById('cboPeriodo').value.trim(),
-            person: document.getElementById('cboTrabajador').value.trim()
-        };
-
-        try {
-            const res = await fetch('/api/reportes/promedio-liquidaciones', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-            const data = await res.json();
-
-            const tbody = document.getElementById('tblBody');
-            tbody.innerHTML = '';
-
-            if (!Array.isArray(data)) {
-                lastPromedioExport = null;
-                document.getElementById('btnExportExcel').disabled = true;
-                alert("Respuesta inválida del servidor.");
-                document.getElementById('reportContainer').classList.add('d-none');
-                return;
-            }
-
-            if (data.length > 0) {
-                document.getElementById('lblNombre').innerText = data[0].Name;
-                document.getElementById('lblIngreso').innerText = 'F. Ingreso: ' + data[0].fechaingreso;
-                document.getElementById('lblCese').innerText = 'F. Cese: ' + data[0].fechacese;
-                document.getElementById('lblRowCount').innerText = data.length;
-
-                const resumen = computeResumenPromedio(data);
-                renderPromedioTabla(data, resumen, tbody);
-                lastPromedioExport = { data, resumen };
-                document.getElementById('btnExportExcel').disabled = false;
-
-                document.getElementById('reportContainer').classList.remove('d-none');
-            } else {
-                lastPromedioExport = null;
-                document.getElementById('btnExportExcel').disabled = true;
-                alert("No se encontraron registros para los filtros seleccionados.");
-                document.getElementById('reportContainer').classList.add('d-none');
-            }
-
-        } catch (error) {
-            console.error("Error al generar reporte:", error);
-            lastPromedioExport = null;
-            document.getElementById('btnExportExcel').disabled = true;
-            alert("Ocurrió un error al consultar el reporte.");
-        }
+        await ejecutarConsultaPromedio();
     });
 
     document.getElementById('btnExportExcel').addEventListener('click', async function () {

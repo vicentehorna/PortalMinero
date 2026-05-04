@@ -129,6 +129,18 @@
                     </a>
                 </li>
 
+                <li class="{{ 'active' if request.endpoint == 'reporte_resumen_total' else '' }}">
+                    <a href="{{ url_for('reporte_resumen_total') }}">
+                        <i class="bi bi-table"></i> Resumen planilla total
+                    </a>
+                </li>
+
+                <li class="{{ 'active' if request.endpoint == 'reporte_planilla_vertical_page' else '' }}">
+                    <a href="{{ url_for('reporte_planilla_vertical_page') }}">
+                        <i class="bi bi-layout-text-sidebar-reverse"></i> Planilla vertical
+                    </a>
+                </li>
+
                 <hr class="mx-3 opacity-25 mt-4">
 
                 <li>

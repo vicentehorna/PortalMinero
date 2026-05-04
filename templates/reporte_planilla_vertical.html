@@ -1,0 +1,651 @@
+{% extends "layout.html" %}
+
+{% block title %}Planilla vertical{% endblock %}
+
+{% block extra_css %}
+<style>
+    .table-scroll-container {
+        max-height: 65vh;
+        overflow: auto;
+        border: 1px solid #dee2e6;
+    }
+
+    .table-planilla-vertical {
+        --sticky-col1-w: 5.75rem;
+        font-size: 11px;
+        white-space: nowrap;
+        margin-bottom: 0;
+    }
+
+    .table-planilla-vertical th,
+    .table-planilla-vertical td {
+        padding: 0.2rem 0.4rem;
+        vertical-align: middle;
+    }
+
+    .table-planilla-vertical thead th {
+        position: sticky;
+        top: 0;
+        background-color: #f8f9fa;
+        z-index: 2;
+        box-shadow: 0 1px 0 #dee2e6;
+    }
+
+    .table-planilla-vertical .sticky-col-1 {
+        position: sticky;
+        left: 0;
+        z-index: 1;
+        background-color: #fff;
+        min-width: var(--sticky-col1-w);
+        width: var(--sticky-col1-w);
+        max-width: var(--sticky-col1-w);
+        box-sizing: border-box;
+    }
+
+    .table-planilla-vertical .sticky-col-2 {
+        position: sticky;
+        left: var(--sticky-col1-w);
+        z-index: 1;
+        background-color: #fff;
+        min-width: 13rem;
+        max-width: 14rem;
+        box-sizing: border-box;
+    }
+
+    .table-planilla-vertical thead th.sticky-col-1,
+    .table-planilla-vertical thead th.sticky-col-2 {
+        z-index: 3;
+        background-color: #f8f9fa;
+    }
+
+    #tbody-vertical tr.reporte-fila-totales-planilla-vertical td {
+        background-color: #d9edf7;
+        font-weight: 700;
+    }
+
+    #tbody-vertical tr.reporte-fila-totales-planilla-vertical .sticky-col-1,
+    #tbody-vertical tr.reporte-fila-totales-planilla-vertical .sticky-col-2 {
+        background-color: #d9edf7;
+    }
+
+    /* Columnas de totales / netos (nombre de concepto) */
+    .table-planilla-vertical thead th.col-total-planilla-vertical {
+        background-color: #ffe69c !important;
+        color: #5c4a00;
+        font-weight: 700;
+        box-shadow: 0 1px 0 #e8d48b;
+    }
+
+    .table-planilla-vertical thead th.col-total-planilla-vertical.sticky-col-1,
+    .table-planilla-vertical thead th.col-total-planilla-vertical.sticky-col-2 {
+        z-index: 4;
+    }
+
+    .table-planilla-vertical tbody td.col-total-planilla-vertical {
+        background-color: #fff8e1;
+    }
+
+    #tbody-vertical tr.reporte-fila-totales-planilla-vertical td.col-total-planilla-vertical {
+        background-color: #ffdf7e !important;
+        color: #4a3d00;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="card shadow-sm border-0 mb-4">
+    <div class="card-header bg-white border-bottom-0 pt-4 pb-0">
+        <h5 class="mb-0 fw-bold text-secondary"><i class="bi bi-layout-text-sidebar-reverse"></i> Planilla vertical (plame)</h5>
+    </div>
+    <div class="card-body">
+        <form id="frmPlanillaVertical" class="row g-3">
+            <div class="col-md-3">
+                <label for="cboCompania" class="form-label small fw-bold text-muted">Compañía</label>
+                <select id="cboCompania" class="form-select form-select-sm" required>
+                    <option value="">Seleccione...</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label for="cboTipoPlanilla" class="form-label small fw-bold text-muted">Tipo planilla</label>
+                <select id="cboTipoPlanilla" class="form-select form-select-sm" required disabled>
+                    <option value="">Seleccione...</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label for="cboProceso" class="form-label small fw-bold text-muted">Proceso</label>
+                <select id="cboProceso" class="form-select form-select-sm" required disabled>
+                    <option value="">Seleccione...</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label for="cboPeriodo" class="form-label small fw-bold text-muted">Periodo</label>
+                <select id="cboPeriodo" class="form-select form-select-sm" required disabled>
+                    <option value="">Seleccione...</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label for="cboTrabajador" class="form-label small fw-bold text-muted">Empleado <span class="fw-normal opacity-75">(opcional)</span></label>
+                <select id="cboTrabajador" class="form-select form-select-sm" disabled>
+                    <option value="">Todos (por defecto)</option>
+                </select>
+            </div>
+            <div class="col-12 d-flex gap-2 border-top pt-3 mt-3">
+                <button type="submit" class="btn btn-primary btn-sm px-4"><i class="bi bi-search"></i> Consultar</button>
+                <button type="button" class="btn btn-success btn-sm px-4" id="btnExportExcel" disabled><i class="bi bi-file-earmark-excel"></i> Exportar a Excel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card shadow-sm border-0 d-none" id="cardResultado">
+    <div class="card-body">
+        <h4 class="text-center fw-bold mb-3">PLANILLA VERTICAL</h4>
+        <div class="table-scroll-container">
+            <table class="table table-bordered table-sm table-hover table-planilla-vertical align-middle">
+                <thead id="thead-vertical"></thead>
+                <tbody id="tbody-vertical"></tbody>
+            </table>
+        </div>
+        <div class="mt-2 text-muted small fw-bold">
+            No. de Registros: <span id="lblRowCount">0</span>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/filtros_reportes_planillas.js') }}"></script>
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', async function () {
+    const filtrosPersist = window.FiltrosPlanillasReportes && window.FiltrosPlanillasReportes.planillaVertical
+        ? window.FiltrosPlanillasReportes.planillaVertical()
+        : null;
+
+    let lastVerticalExport = null;
+
+    function escapeHtml(s) {
+        return String(s || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    function optionExists(select, value) {
+        if (!select || value === '' || value == null) return false;
+        const v = String(value);
+        return Array.from(select.options).some((o) => o.value === v);
+    }
+
+    /** Coincide valor de compañía aunque la API use otra capitalización o espacios. */
+    function seleccionarCompaniaInsensitive(select, codigoDeseado) {
+        if (!select) return false;
+        const want = String(codigoDeseado || '').trim().toUpperCase();
+        if (!want) return false;
+        const opt = Array.from(select.options).find((o) => String(o.value || '').trim().toUpperCase() === want);
+        if (!opt) return false;
+        select.value = opt.value;
+        return true;
+    }
+
+    /** Si el valor actual no corresponde a ninguna opción (dato viejo), limpiar. */
+    function limpiarValorComboSiObsoleto(select) {
+        if (!select) return;
+        const v = String(select.value || '').trim();
+        if (!v) return;
+        const ok = Array.from(select.options).some((o) => String(o.value) === v);
+        if (!ok) select.value = '';
+    }
+
+    /** Primera opción vacía = envío `person = 0` al SP; texto claro para el usuario. */
+    function etiquetaTrabajadorTodosPorDefecto(selectElement) {
+        if (!selectElement || !selectElement.options.length) return;
+        const o = selectElement.options[0];
+        if (o && o.value === '') o.textContent = 'Todos (por defecto)';
+    }
+
+    function fmtCelda(valor) {
+        if (valor === null || valor === undefined || valor === '') return '';
+        if (typeof valor === 'number' && Number.isFinite(valor)) {
+            return valor.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+        return String(valor);
+    }
+
+    /** Debe coincidir con la cantidad de columnas fijas del backend (antes de concept01…). */
+    const NUM_COLS_FIJAS = 14;
+
+    const NOMBRES_COLUMNAS_TOTAL_DESTACADAS = [
+        'Neto a recibir',
+        'Total Egresos',
+        'Total Ingresos',
+        'Total Aportes',
+        'NETO',
+        'TOTAL INGRESOS',
+        'TOTAL EGRESOS',
+        'TOTAL APORTES'
+    ];
+
+    function esColumnaTotalDestacada(headerText) {
+        const n = String(headerText || '').trim().toLowerCase();
+        return NOMBRES_COLUMNAS_TOTAL_DESTACADAS.some((h) => h.toLowerCase() === n);
+    }
+
+    function computeConceptSums(headers, filas) {
+        const ncols = headers.length;
+        const sums = new Array(ncols).fill(null);
+        for (let c = NUM_COLS_FIJAS; c < ncols; c++) {
+            sums[c] = 0;
+        }
+        (filas || []).forEach((rowVals) => {
+            if (!rowVals) return;
+            for (let c = NUM_COLS_FIJAS; c < ncols; c++) {
+                const v = rowVals[c];
+                if (typeof v === 'number' && Number.isFinite(v)) sums[c] += v;
+            }
+        });
+        return sums;
+    }
+
+    function selectedText(id) {
+        const el = document.getElementById(id);
+        const opt = el && el.options[el.selectedIndex];
+        return opt ? opt.textContent.trim() : '';
+    }
+
+    async function exportPlanillaVerticalExcel(payload, meta) {
+        if (typeof ExcelJS === 'undefined') {
+            alert('No se pudo cargar la librería de Excel (ExcelJS). Recargue la página e intente de nuevo.');
+            return;
+        }
+        const headers = payload.headers || [];
+        const filas = payload.data || [];
+        const ncols = headers.length;
+        if (!ncols) return;
+
+        const destacarCol = headers.map((h) => esColumnaTotalDestacada(h));
+        const sums = computeConceptSums(headers, filas);
+
+        const F = {
+            title: 'FFE9ECEF',
+            meta: 'FFF8F9FA',
+            header: 'FFF8F9FA',
+            headerDest: 'FFFFE69C',
+            data: 'FFFFFFFF',
+            dataDest: 'FFFFF8E1',
+            totalRow: 'FFD9EDF7',
+            totalDest: 'FFFFDF7E'
+        };
+        const fill = (argb) => ({ type: 'pattern', pattern: 'solid', fgColor: { argb } });
+        const borderThin = { style: 'thin', color: { argb: 'FFCCCCCC' } };
+        const allBorders = { top: borderThin, left: borderThin, bottom: borderThin, right: borderThin };
+        const alignCenter = { horizontal: 'center', vertical: 'middle' };
+
+        const wb = new ExcelJS.Workbook();
+        const ws = wb.addWorksheet('Planilla vertical', { views: [{ showGridLines: true }] });
+
+        let rowIdx = 1;
+        ws.mergeCells(rowIdx, 1, rowIdx, ncols);
+        const titleCell = ws.getCell(rowIdx, 1);
+        titleCell.value = 'PLANILLA VERTICAL';
+        titleCell.font = { bold: true, size: 14 };
+        titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+        titleCell.fill = fill(F.title);
+        titleCell.border = allBorders;
+        ws.getRow(rowIdx).height = 26;
+        rowIdx++;
+
+        const metaRow = ws.addRow([
+            'Compañía', meta.compania || '',
+            'Tipo planilla', meta.tipoPlanilla || '',
+            'Proceso', meta.proceso || '',
+            'Periodo', meta.periodo || ''
+        ]);
+        metaRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+            if (colNumber <= 8) {
+                cell.fill = fill(F.meta);
+                cell.font = { bold: colNumber % 2 === 1 };
+                cell.alignment = alignCenter;
+            }
+            cell.border = allBorders;
+        });
+        rowIdx++;
+
+        ws.addRow([]);
+        rowIdx++;
+
+        const hRow = ws.addRow(headers);
+        hRow.font = { bold: true };
+        hRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+            const idx = colNumber - 1;
+            cell.fill = fill(destacarCol[idx] ? F.headerDest : F.header);
+            cell.alignment = idx >= NUM_COLS_FIJAS ? { horizontal: 'right', vertical: 'middle' } : alignCenter;
+            cell.border = allBorders;
+        });
+        rowIdx++;
+
+        filas.forEach((rowVals) => {
+            const r = ws.addRow(rowVals || []);
+            r.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+                const idx = colNumber - 1;
+                const v = rowVals && rowVals[idx];
+                cell.fill = fill(destacarCol[idx] ? F.dataDest : F.data);
+                cell.border = allBorders;
+                if (typeof v === 'number' && Number.isFinite(v)) {
+                    cell.numFmt = '#,##0.00';
+                    cell.alignment = { horizontal: 'right', vertical: 'middle' };
+                } else {
+                    cell.alignment = idx <= 1 ? { horizontal: 'left', vertical: 'middle' } : alignCenter;
+                }
+            });
+            rowIdx++;
+        });
+
+        const totalVals = [];
+        for (let c = 0; c < ncols; c++) {
+            if (c === 0) totalVals.push('TOTALES');
+            else if (c === 1) totalVals.push('');
+            else if (c < NUM_COLS_FIJAS) totalVals.push('');
+            else {
+                const s = sums[c];
+                totalVals.push(typeof s === 'number' && Number.isFinite(s) ? s : 0);
+            }
+        }
+        const tRow = ws.addRow(totalVals);
+        tRow.font = { bold: true };
+        tRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+            const idx = colNumber - 1;
+            cell.fill = fill(destacarCol[idx] ? F.totalDest : F.totalRow);
+            cell.border = allBorders;
+            if (idx >= NUM_COLS_FIJAS) {
+                cell.numFmt = '#,##0.00';
+                cell.alignment = { horizontal: 'right', vertical: 'middle' };
+            } else if (idx === 0) {
+                cell.alignment = { horizontal: 'left', vertical: 'middle' };
+            } else {
+                cell.alignment = alignCenter;
+            }
+        });
+
+        ws.getColumn(1).width = 12;
+        ws.getColumn(2).width = 36;
+        for (let c = 3; c <= ncols; c++) {
+            ws.getColumn(c).width = 14;
+        }
+
+        const buffer = await wb.xlsx.writeBuffer();
+        const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const safe = (s) => String(s || 'export').replace(/[\\/:*?"<>|]+/g, '_').trim().slice(0, 80);
+        const stamp = new Date().toISOString().slice(0, 10);
+        a.download = `planilla_vertical_${safe(meta.compania)}_${stamp}.xlsx`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+    }
+
+    function renderizarTablaVertical(response) {
+        const thead = document.getElementById('thead-vertical');
+        const tbody = document.getElementById('tbody-vertical');
+        const headers = response.headers || [];
+        const ncols = headers.length;
+        const destacarCol = headers.map((h) => esColumnaTotalDestacada(h));
+
+        let htmlHeaders = '<tr>';
+        headers.forEach((header, index) => {
+            const sticky = index === 0 ? 'sticky-col-1' : (index === 1 ? 'sticky-col-2' : '');
+            const marcarCls = destacarCol[index] ? 'col-total-planilla-vertical' : '';
+            const cls = [sticky, marcarCls].filter(Boolean).join(' ');
+            htmlHeaders += `<th class="${cls}">${escapeHtml(header)}</th>`;
+        });
+        htmlHeaders += '</tr>';
+        thead.innerHTML = htmlHeaders;
+
+        const filas = response.data || [];
+        let htmlBody = '';
+        filas.forEach((rowVals) => {
+            htmlBody += '<tr>';
+            (rowVals || []).forEach((valor, index) => {
+                let sticky = '';
+                if (index === 0) sticky = 'sticky-col-1 font-monospace fw-bold';
+                else if (index === 1) sticky = 'sticky-col-2 text-truncate';
+                const marcarCls = destacarCol[index] ? 'col-total-planilla-vertical' : '';
+                const isNum = typeof valor === 'number' && Number.isFinite(valor);
+                const align = isNum ? 'text-end' : '';
+                const txt = isNum ? fmtCelda(valor) : escapeHtml(fmtCelda(valor));
+                const cls = [sticky, marcarCls, align].filter(Boolean).join(' ');
+                htmlBody += `<td class="${cls}">${txt}</td>`;
+            });
+            htmlBody += '</tr>';
+        });
+
+        const sums = computeConceptSums(headers, filas);
+
+        htmlBody += '<tr class="reporte-fila-totales-planilla-vertical">';
+        for (let c = 0; c < ncols; c++) {
+            let sticky = '';
+            if (c === 0) sticky = 'sticky-col-1';
+            else if (c === 1) sticky = 'sticky-col-2';
+            const marcarCls = destacarCol[c] ? 'col-total-planilla-vertical' : '';
+            if (c === 0) {
+                htmlBody += `<td class="${[sticky, marcarCls].filter(Boolean).join(' ')}">TOTALES</td>`;
+            } else if (c === 1) {
+                htmlBody += `<td class="${[sticky, marcarCls].filter(Boolean).join(' ')}"></td>`;
+            } else if (c < NUM_COLS_FIJAS) {
+                htmlBody += `<td class="${marcarCls}"></td>`;
+            } else {
+                const s = sums[c];
+                const txt = typeof s === 'number' && Number.isFinite(s) ? fmtCelda(s) : fmtCelda(0);
+                htmlBody += `<td class="${['text-end', sticky, marcarCls].filter(Boolean).join(' ')}">${txt}</td>`;
+            }
+        }
+        htmlBody += '</tr>';
+
+        tbody.innerHTML = htmlBody;
+        document.getElementById('lblRowCount').textContent = String(filas.length);
+    }
+
+    async function ejecutarConsultaVertical() {
+        lastVerticalExport = null;
+        document.getElementById('btnExportExcel').disabled = true;
+        if (filtrosPersist) filtrosPersist.guardar();
+        const cia = document.getElementById('cboCompania').value.trim();
+        const payroll_type = document.getElementById('cboTipoPlanilla').value.trim();
+        const process = document.getElementById('cboProceso').value.trim();
+        const period = document.getElementById('cboPeriodo').value.trim();
+        let person = document.getElementById('cboTrabajador').value.trim();
+        if (!person) person = '0';
+
+        try {
+            const res = await fetch('/reporte_planilla_vertical', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cia, payroll_type, process, period, person })
+            });
+            const payload = await res.json();
+            if (!res.ok) {
+                document.getElementById('cardResultado').classList.add('d-none');
+                alert(payload.error || 'Error al generar el reporte.');
+                return;
+            }
+            if (payload.error) {
+                document.getElementById('cardResultado').classList.add('d-none');
+                alert(payload.error);
+                return;
+            }
+            if (!Array.isArray(payload.headers) || !Array.isArray(payload.data)) {
+                alert('Respuesta inválida del servidor.');
+                document.getElementById('cardResultado').classList.add('d-none');
+                return;
+            }
+            document.getElementById('cardResultado').classList.remove('d-none');
+            renderizarTablaVertical(payload);
+            lastVerticalExport = {
+                headers: payload.headers,
+                data: payload.data,
+                meta: {
+                    compania: selectedText('cboCompania'),
+                    tipoPlanilla: selectedText('cboTipoPlanilla'),
+                    proceso: selectedText('cboProceso'),
+                    periodo: selectedText('cboPeriodo')
+                }
+            };
+            document.getElementById('btnExportExcel').disabled = false;
+        } catch (e) {
+            console.error(e);
+            document.getElementById('cardResultado').classList.add('d-none');
+            document.getElementById('btnExportExcel').disabled = true;
+            alert('Error de red o del servidor.');
+        }
+    }
+
+    const poblarSelect = async (url, selectElement) => {
+        selectElement.innerHTML = '';
+        const loading = document.createElement('option');
+        loading.value = '';
+        loading.textContent = 'Cargando...';
+        selectElement.appendChild(loading);
+        try {
+            const res = await fetch(url);
+            const data = await res.json();
+            selectElement.innerHTML = '';
+            const def = document.createElement('option');
+            def.value = '';
+            def.textContent = 'Seleccione...';
+            selectElement.appendChild(def);
+            (Array.isArray(data) ? data : []).forEach((item) => {
+                const opt = document.createElement('option');
+                opt.value = item.id != null ? String(item.id) : '';
+                opt.textContent = item.text != null ? String(item.text) : '';
+                selectElement.appendChild(opt);
+            });
+            selectElement.disabled = false;
+        } catch (err) {
+            console.error(err);
+            selectElement.innerHTML = '<option value="">Error</option>';
+        }
+    };
+
+    const DEFAULT_CIA = 'BGT';
+    const cboCia = document.getElementById('cboCompania');
+    const cboPlanilla = document.getElementById('cboTipoPlanilla');
+    const cboTrabajador = document.getElementById('cboTrabajador');
+
+    await poblarSelect('/api/selectores/companias', cboCia);
+    limpiarValorComboSiObsoleto(cboCia);
+
+    const guardadoObj = filtrosPersist ? filtrosPersist.leer() : null;
+    const ciaGuardada = guardadoObj ? String(guardadoObj.cia || '').trim() : '';
+    if (filtrosPersist && ciaGuardada) {
+        await filtrosPersist.aplicarRestauracionCascada({ poblarSelect });
+        etiquetaTrabajadorTodosPorDefecto(cboTrabajador);
+    }
+
+    limpiarValorComboSiObsoleto(cboCia);
+    if (!String(cboCia.value || '').trim()) {
+        if (seleccionarCompaniaInsensitive(cboCia, DEFAULT_CIA)) {
+            const ciaNorm = cboCia.value.trim();
+            await poblarSelect(`/api/selectores/planillas?cia=${encodeURIComponent(ciaNorm)}`, cboPlanilla);
+            await poblarSelect(`/api/selectores/trabajadores?cia=${encodeURIComponent(ciaNorm)}`, cboTrabajador);
+            etiquetaTrabajadorTodosPorDefecto(cboTrabajador);
+        }
+    }
+
+    {
+        const cia = cboCia.value.trim();
+        const pt = document.getElementById('cboTipoPlanilla').value.trim();
+        const proc = document.getElementById('cboProceso').value.trim();
+        const period = document.getElementById('cboPeriodo').value.trim();
+        if (cia && pt && proc && period) {
+            await ejecutarConsultaVertical();
+        }
+    }
+
+    document.getElementById('cboCompania').addEventListener('change', async function () {
+        const cia = this.value;
+        const cboPlanilla = document.getElementById('cboTipoPlanilla');
+        const cboTrabajador = document.getElementById('cboTrabajador');
+
+        document.getElementById('cboProceso').innerHTML = '<option value="">Seleccione...</option>';
+        document.getElementById('cboProceso').disabled = true;
+        document.getElementById('cboPeriodo').innerHTML = '<option value="">Seleccione...</option>';
+        document.getElementById('cboPeriodo').disabled = true;
+
+        if (cia) {
+            await poblarSelect(`/api/selectores/planillas?cia=${encodeURIComponent(cia)}`, cboPlanilla);
+            await poblarSelect(`/api/selectores/trabajadores?cia=${encodeURIComponent(cia)}`, cboTrabajador);
+            etiquetaTrabajadorTodosPorDefecto(cboTrabajador);
+        } else {
+            cboPlanilla.innerHTML = '<option value="">Seleccione...</option>';
+            cboPlanilla.disabled = true;
+            cboTrabajador.innerHTML = '<option value="">Seleccione...</option>';
+            cboTrabajador.disabled = true;
+        }
+    });
+
+    document.getElementById('cboTipoPlanilla').addEventListener('change', function () {
+        const cia = document.getElementById('cboCompania').value;
+        const pt = this.value;
+        const cboProceso = document.getElementById('cboProceso');
+
+        document.getElementById('cboPeriodo').innerHTML = '<option value="">Seleccione...</option>';
+        document.getElementById('cboPeriodo').disabled = true;
+
+        if (pt) {
+            poblarSelect(
+                `/api/selectores/procesos?cia=${encodeURIComponent(cia)}&payrolltype=${encodeURIComponent(pt)}`,
+                cboProceso
+            );
+        } else {
+            cboProceso.innerHTML = '<option value="">Seleccione...</option>';
+            cboProceso.disabled = true;
+        }
+    });
+
+    document.getElementById('cboProceso').addEventListener('change', function () {
+        const cia = document.getElementById('cboCompania').value;
+        const pt = document.getElementById('cboTipoPlanilla').value;
+        const proc = this.value;
+        const cboPeriodo = document.getElementById('cboPeriodo');
+
+        if (proc) {
+            poblarSelect(
+                `/api/selectores/periodos?cia=${encodeURIComponent(cia)}&payrolltype=${encodeURIComponent(pt)}&processtype=${encodeURIComponent(proc)}`,
+                cboPeriodo
+            );
+        } else {
+            cboPeriodo.innerHTML = '<option value="">Seleccione...</option>';
+            cboPeriodo.disabled = true;
+        }
+    });
+
+    if (filtrosPersist) {
+        filtrosPersist.registrarGuardadoEnCambio();
+    }
+
+    document.getElementById('frmPlanillaVertical').addEventListener('submit', async function (e) {
+        e.preventDefault();
+        await ejecutarConsultaVertical();
+    });
+
+    document.getElementById('btnExportExcel').addEventListener('click', async function () {
+        if (!lastVerticalExport || !lastVerticalExport.headers || !lastVerticalExport.headers.length) {
+            alert('Ejecute primero una búsqueda con resultados.');
+            return;
+        }
+        try {
+            await exportPlanillaVerticalExcel(
+                { headers: lastVerticalExport.headers, data: lastVerticalExport.data },
+                lastVerticalExport.meta
+            );
+        } catch (err) {
+            console.error(err);
+            alert('No se pudo generar el archivo Excel.');
+        }
+    });
+});
+</script>
+{% endblock %}

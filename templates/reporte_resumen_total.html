@@ -1,0 +1,474 @@
+{% extends "layout.html" %}
+
+{% block title %}Resumen planilla total{% endblock %}
+
+{% block extra_css %}
+<style>
+    #tbody-resumen-total tr.reporte-fila-totales td {
+        background-color: #d9edf7;
+        font-weight: 700;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="card shadow-sm border-0 mb-4">
+    <div class="card-header bg-white border-bottom-0 pt-4 pb-0">
+        <h5 class="mb-0 fw-bold text-secondary"><i class="bi bi-table"></i> Reporte resumen total (plame)</h5>
+    </div>
+    <div class="card-body">
+        <form id="frmResumenTotal" class="row g-3">
+            <div class="col-md-3">
+                <label for="cboCompania" class="form-label small fw-bold text-muted">Compañía</label>
+                <select id="cboCompania" class="form-select form-select-sm" required>
+                    <option value="">Seleccione...</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label for="cboTipoPlanilla" class="form-label small fw-bold text-muted">Tipo planilla</label>
+                <select id="cboTipoPlanilla" class="form-select form-select-sm" required disabled>
+                    <option value="">Seleccione...</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label for="cboProceso" class="form-label small fw-bold text-muted">Proceso</label>
+                <select id="cboProceso" class="form-select form-select-sm" required disabled>
+                    <option value="">Seleccione...</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label for="cboPeriodo" class="form-label small fw-bold text-muted">Periodo</label>
+                <select id="cboPeriodo" class="form-select form-select-sm" required disabled>
+                    <option value="">Seleccione...</option>
+                </select>
+            </div>
+            <div class="col-12 d-flex gap-2 border-top pt-3 mt-3">
+                <button type="submit" class="btn btn-primary btn-sm px-4"><i class="bi bi-search"></i> Consultar</button>
+                <button type="button" class="btn btn-success btn-sm px-4" id="btnExportExcel" disabled><i class="bi bi-file-earmark-excel"></i> Exportar a Excel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card shadow-sm border-0 d-none" id="cardResultado">
+    <div class="card-body">
+        <h4 class="text-center fw-bold mb-4">RESUMEN PLANILLA TOTAL</h4>
+        <div class="table-responsive">
+            <table class="table table-sm table-hover table-bordered border text-center align-middle" style="font-size: 0.85rem;">
+                <thead class="table-light">
+                    <tr>
+                        <th>TIPO</th>
+                        <th>PDT</th>
+                        <th>CONCEPTO</th>
+                        <th class="text-end">MENSUAL</th>
+                        <th class="text-end">SEMANAL</th>
+                        <th class="text-end">LIQUIDACIONES</th>
+                        <th class="text-end">VACACIONES</th>
+                        <th class="text-end">CTS</th>
+                        <th class="text-end">GRATI</th>
+                        <th class="text-end">TOTAL</th>
+                    </tr>
+                </thead>
+                <tbody id="tbody-resumen-total">
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/filtros_reportes_planillas.js') }}"></script>
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', async function () {
+    const filtrosPersist = window.FiltrosPlanillasReportes && window.FiltrosPlanillasReportes.resumenTotal
+        ? window.FiltrosPlanillasReportes.resumenTotal()
+        : null;
+
+    const EXCEL_HEADER = ['TIPO', 'PDT', 'CONCEPTO', 'MENSUAL', 'SEMANAL', 'LIQUIDACIONES', 'VACACIONES', 'CTS', 'GRATI', 'TOTAL'];
+    const NCOLS = EXCEL_HEADER.length;
+    let lastResumenExport = null;
+
+    const num = (v) => Number(v == null ? 0 : v);
+
+    function formatNumber(n) {
+        return Number(n == null ? 0 : n).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    function escapeHtml(s) {
+        return String(s || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    function renderFilaSubtotal(tipo, montos) {
+        const t = escapeHtml(tipo);
+        return `
+            <tr class="reporte-fila-totales">
+                <td colspan="3" class="text-end">TOTAL ${t}</td>
+                <td class="text-end">${formatNumber(montos.mensual)}</td>
+                <td class="text-end">${formatNumber(montos.semanal)}</td>
+                <td class="text-end">${formatNumber(montos.liquida)}</td>
+                <td class="text-end">${formatNumber(montos.vacaciones)}</td>
+                <td class="text-end">${formatNumber(montos.cts)}</td>
+                <td class="text-end">${formatNumber(montos.grati)}</td>
+                <td class="text-end text-dark">${formatNumber(montos.total)}</td>
+            </tr>
+        `;
+    }
+
+    function renderizarResumenTotal(data) {
+        const tbody = document.getElementById('tbody-resumen-total');
+        tbody.innerHTML = '';
+
+        let currentTipo = '';
+        const subTotales = { mensual: 0, semanal: 0, liquida: 0, vacaciones: 0, cts: 0, grati: 0, total: 0 };
+
+        data.forEach((item, index) => {
+            if (currentTipo !== '' && currentTipo !== item.tipo) {
+                tbody.insertAdjacentHTML('beforeend', renderFilaSubtotal(currentTipo, subTotales));
+                Object.keys(subTotales).forEach((k) => { subTotales[k] = 0; });
+            }
+            currentTipo = item.tipo;
+
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td class="small fw-bold text-muted">${escapeHtml(item.tipo)}</td>
+                <td class="font-monospace">${escapeHtml(item.pdt)}</td>
+                <td class="text-start">${escapeHtml(item.concepto)}</td>
+                <td class="text-end">${formatNumber(item.mensual)}</td>
+                <td class="text-end">${formatNumber(item.semanal)}</td>
+                <td class="text-end">${formatNumber(item.liquida)}</td>
+                <td class="text-end">${formatNumber(item.vacaciones)}</td>
+                <td class="text-end">${formatNumber(item.cts)}</td>
+                <td class="text-end">${formatNumber(item.grati)}</td>
+                <td class="text-end fw-bold text-primary">${formatNumber(item.total)}</td>
+            `;
+            tbody.appendChild(tr);
+
+            subTotales.mensual += Number(item.mensual || 0);
+            subTotales.semanal += Number(item.semanal || 0);
+            subTotales.liquida += Number(item.liquida || 0);
+            subTotales.vacaciones += Number(item.vacaciones || 0);
+            subTotales.cts += Number(item.cts || 0);
+            subTotales.grati += Number(item.grati || 0);
+            subTotales.total += Number(item.total || 0);
+
+            if (index === data.length - 1) {
+                tbody.insertAdjacentHTML('beforeend', renderFilaSubtotal(currentTipo, subTotales));
+            }
+        });
+    }
+
+    function buildRowsWithSubtotales(data) {
+        const rows = [];
+        let currentTipo = '';
+        const emptySub = () => ({ mensual: 0, semanal: 0, liquida: 0, vacaciones: 0, cts: 0, grati: 0, total: 0 });
+        let subTotales = emptySub();
+
+        data.forEach((item, index) => {
+            if (currentTipo !== '' && currentTipo !== item.tipo) {
+                rows.push({ subtotal: true, tipo: currentTipo, ...subTotales });
+                subTotales = emptySub();
+            }
+            currentTipo = item.tipo;
+            rows.push({ subtotal: false, item });
+            subTotales.mensual += num(item.mensual);
+            subTotales.semanal += num(item.semanal);
+            subTotales.liquida += num(item.liquida);
+            subTotales.vacaciones += num(item.vacaciones);
+            subTotales.cts += num(item.cts);
+            subTotales.grati += num(item.grati);
+            subTotales.total += num(item.total);
+            if (index === data.length - 1) {
+                rows.push({ subtotal: true, tipo: currentTipo, ...subTotales });
+            }
+        });
+        return rows;
+    }
+
+    async function exportResumenTotalExcel(data, meta) {
+        if (typeof ExcelJS === 'undefined') {
+            alert('No se pudo cargar la librería de Excel (ExcelJS). Recargue la página e intente de nuevo.');
+            return;
+        }
+        const F = {
+            header: 'FFF8F9FA',
+            data: 'FFFFFFFF',
+            subtotal: 'FFD9EDF7',
+            title: 'FFE9ECEF',
+            meta: 'FFF8F9FA'
+        };
+        const fill = (argb) => ({ type: 'pattern', pattern: 'solid', fgColor: { argb } });
+        const borderThin = { style: 'thin', color: { argb: 'FFCCCCCC' } };
+        const allBorders = { top: borderThin, left: borderThin, bottom: borderThin, right: borderThin };
+        const alignCenter = { horizontal: 'center', vertical: 'middle' };
+
+        const wb = new ExcelJS.Workbook();
+        const ws = wb.addWorksheet('Resumen total', { views: [{ showGridLines: true }] });
+
+        let rowIdx = 1;
+        ws.mergeCells(rowIdx, 1, rowIdx, NCOLS);
+        const titleCell = ws.getCell(rowIdx, 1);
+        titleCell.value = 'RESUMEN PLANILLA TOTAL';
+        titleCell.font = { bold: true, size: 14 };
+        titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+        titleCell.fill = fill(F.title);
+        titleCell.border = allBorders;
+        ws.getRow(rowIdx).height = 26;
+        rowIdx++;
+
+        const metaRow = ws.addRow([
+            'Compañía', meta.compania || '',
+            'Tipo planilla', meta.tipoPlanilla || '',
+            'Periodo', meta.periodo || ''
+        ]);
+        metaRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+            if (colNumber <= 6) {
+                cell.fill = fill(F.meta);
+                cell.font = { bold: colNumber % 2 === 1 };
+                cell.alignment = alignCenter;
+            }
+            cell.border = allBorders;
+        });
+        rowIdx++;
+
+        ws.addRow([]);
+        rowIdx++;
+
+        const hRow = ws.addRow(EXCEL_HEADER);
+        hRow.font = { bold: true };
+        hRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+            cell.fill = fill(F.header);
+            cell.alignment = colNumber <= 3 ? { horizontal: 'center', vertical: 'middle' } : { horizontal: 'right', vertical: 'middle' };
+            cell.border = allBorders;
+        });
+        rowIdx++;
+
+        const flat = buildRowsWithSubtotales(data);
+        flat.forEach((row) => {
+            if (row.subtotal) {
+                const r = ws.addRow(['', '', `TOTAL ${row.tipo}`, row.mensual, row.semanal, row.liquida, row.vacaciones, row.cts, row.grati, row.total]);
+                r.font = { bold: true };
+                r.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+                    cell.fill = fill(F.subtotal);
+                    cell.border = allBorders;
+                    if (colNumber >= 4) {
+                        cell.numFmt = '#,##0.00';
+                        cell.alignment = { horizontal: 'right', vertical: 'middle' };
+                    } else if (colNumber === 3) {
+                        cell.alignment = { horizontal: 'right', vertical: 'middle' };
+                    }
+                });
+            } else {
+                const it = row.item;
+                const r = ws.addRow([it.tipo, it.pdt, it.concepto, num(it.mensual), num(it.semanal), num(it.liquida), num(it.vacaciones), num(it.cts), num(it.grati), num(it.total)]);
+                r.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+                    cell.fill = fill(F.data);
+                    cell.border = allBorders;
+                    if (colNumber <= 3) {
+                        cell.alignment = colNumber === 3 ? { horizontal: 'left', vertical: 'middle' } : { horizontal: 'center', vertical: 'middle' };
+                        if (colNumber === 1) cell.font = { bold: true, color: { argb: 'FF6C757D' } };
+                    } else {
+                        cell.numFmt = '#,##0.00';
+                        cell.alignment = { horizontal: 'right', vertical: 'middle' };
+                    }
+                });
+            }
+            rowIdx++;
+        });
+
+        ws.getColumn(1).width = 14;
+        ws.getColumn(2).width = 12;
+        ws.getColumn(3).width = 36;
+        for (let c = 4; c <= NCOLS; c++) {
+            ws.getColumn(c).width = 16;
+        }
+
+        const buffer = await wb.xlsx.writeBuffer();
+        const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const safe = (s) => String(s || 'export').replace(/[\\/:*?"<>|]+/g, '_').trim().slice(0, 80);
+        const stamp = new Date().toISOString().slice(0, 10);
+        a.download = `resumen_planilla_total_${safe(meta.compania)}_${stamp}.xlsx`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+    }
+
+    const poblarSelect = async (url, selectElement) => {
+        selectElement.innerHTML = '';
+        const loading = document.createElement('option');
+        loading.value = '';
+        loading.textContent = 'Cargando...';
+        selectElement.appendChild(loading);
+        try {
+            const res = await fetch(url);
+            const data = await res.json();
+            selectElement.innerHTML = '';
+            const def = document.createElement('option');
+            def.value = '';
+            def.textContent = 'Seleccione...';
+            selectElement.appendChild(def);
+            (Array.isArray(data) ? data : []).forEach((item) => {
+                const opt = document.createElement('option');
+                opt.value = item.id != null ? String(item.id) : '';
+                opt.textContent = item.text != null ? String(item.text) : '';
+                selectElement.appendChild(opt);
+            });
+            selectElement.disabled = false;
+        } catch (e) {
+            console.error(e);
+            selectElement.innerHTML = '<option value="">Error</option>';
+        }
+    };
+
+    function selectedText(id) {
+        const el = document.getElementById(id);
+        const opt = el.options[el.selectedIndex];
+        return opt ? opt.textContent.trim() : '';
+    }
+
+    async function ejecutarConsultaResumen() {
+        if (filtrosPersist) filtrosPersist.guardar();
+        const cia = document.getElementById('cboCompania').value.trim();
+        const payroll_type = document.getElementById('cboTipoPlanilla').value.trim();
+        const period = document.getElementById('cboPeriodo').value.trim();
+
+        lastResumenExport = null;
+        document.getElementById('btnExportExcel').disabled = true;
+
+        try {
+            const res = await fetch('/reporte_resumen_total', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cia, payroll_type, period })
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                document.getElementById('cardResultado').classList.add('d-none');
+                alert(data.error || 'Error al consultar el reporte.');
+                return;
+            }
+            if (!Array.isArray(data)) {
+                alert(data.error || 'Respuesta inválida.');
+                document.getElementById('cardResultado').classList.add('d-none');
+                return;
+            }
+            if (data.length === 0) {
+                document.getElementById('tbody-resumen-total').innerHTML = '';
+                document.getElementById('cardResultado').classList.add('d-none');
+                alert('No se encontraron registros para los filtros seleccionados.');
+                return;
+            }
+            renderizarResumenTotal(data);
+            document.getElementById('cardResultado').classList.remove('d-none');
+            lastResumenExport = {
+                data,
+                meta: {
+                    compania: selectedText('cboCompania'),
+                    tipoPlanilla: selectedText('cboTipoPlanilla'),
+                    periodo: selectedText('cboPeriodo')
+                }
+            };
+            document.getElementById('btnExportExcel').disabled = false;
+        } catch (err) {
+            console.error(err);
+            document.getElementById('cardResultado').classList.add('d-none');
+            alert('Error de red o del servidor.');
+        }
+    }
+
+    await poblarSelect('/api/selectores/companias', document.getElementById('cboCompania'));
+    if (filtrosPersist) {
+        await filtrosPersist.aplicarRestauracionCascada({ poblarSelect });
+        const cia = document.getElementById('cboCompania').value.trim();
+        const payroll_type = document.getElementById('cboTipoPlanilla').value.trim();
+        const period = document.getElementById('cboPeriodo').value.trim();
+        if (cia && payroll_type && period) {
+            await ejecutarConsultaResumen();
+        }
+    }
+
+    document.getElementById('cboCompania').addEventListener('change', function () {
+        const cia = this.value;
+        const cboPlanilla = document.getElementById('cboTipoPlanilla');
+
+        document.getElementById('cboProceso').innerHTML = '<option value="">Seleccione...</option>';
+        document.getElementById('cboProceso').disabled = true;
+        document.getElementById('cboPeriodo').innerHTML = '<option value="">Seleccione...</option>';
+        document.getElementById('cboPeriodo').disabled = true;
+
+        if (cia) {
+            poblarSelect(`/api/selectores/planillas?cia=${encodeURIComponent(cia)}`, cboPlanilla);
+        } else {
+            cboPlanilla.innerHTML = '<option value="">Seleccione...</option>';
+            cboPlanilla.disabled = true;
+        }
+    });
+
+    document.getElementById('cboTipoPlanilla').addEventListener('change', function () {
+        const cia = document.getElementById('cboCompania').value;
+        const pt = this.value;
+        const cboProceso = document.getElementById('cboProceso');
+
+        document.getElementById('cboPeriodo').innerHTML = '<option value="">Seleccione...</option>';
+        document.getElementById('cboPeriodo').disabled = true;
+
+        if (pt) {
+            poblarSelect(
+                `/api/selectores/procesos?cia=${encodeURIComponent(cia)}&payrolltype=${encodeURIComponent(pt)}`,
+                cboProceso
+            );
+        } else {
+            cboProceso.innerHTML = '<option value="">Seleccione...</option>';
+            cboProceso.disabled = true;
+        }
+    });
+
+    document.getElementById('cboProceso').addEventListener('change', function () {
+        const cia = document.getElementById('cboCompania').value;
+        const pt = document.getElementById('cboTipoPlanilla').value;
+        const proc = this.value;
+        const cboPeriodo = document.getElementById('cboPeriodo');
+
+        if (proc) {
+            poblarSelect(
+                `/api/selectores/periodos?cia=${encodeURIComponent(cia)}&payrolltype=${encodeURIComponent(pt)}&processtype=${encodeURIComponent(proc)}`,
+                cboPeriodo
+            );
+        } else {
+            cboPeriodo.innerHTML = '<option value="">Seleccione...</option>';
+            cboPeriodo.disabled = true;
+        }
+    });
+
+    if (filtrosPersist) {
+        filtrosPersist.registrarGuardadoEnCambio();
+    }
+
+    document.getElementById('frmResumenTotal').addEventListener('submit', async function (e) {
+        e.preventDefault();
+        await ejecutarConsultaResumen();
+    });
+
+    document.getElementById('btnExportExcel').addEventListener('click', async function () {
+        if (!lastResumenExport || !lastResumenExport.data || !lastResumenExport.data.length) {
+            alert('Ejecute primero una búsqueda con resultados.');
+            return;
+        }
+        try {
+            await exportResumenTotalExcel(lastResumenExport.data, lastResumenExport.meta);
+        } catch (err) {
+            console.error(err);
+            alert('No se pudo generar el archivo Excel.');
+        }
+    });
+});
+</script>
+{% endblock %}

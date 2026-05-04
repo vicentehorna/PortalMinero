@@ -177,6 +177,12 @@ def reporte_liquidaciones():
     return render_template('reporte_liquidaciones.html')
 
 
+@app.route('/reporte-planilla-vertical')
+@login_required
+def reporte_planilla_vertical_page():
+    return render_template('reporte_planilla_vertical.html')
+
+
 # ==========================================
 # APIS PARA SELECTORES EN CASCADA (stored procedures)
 # ==========================================
@@ -346,6 +352,318 @@ def api_reporte_promedio_liq():
     except Exception:
         logging.exception("api_reporte_promedio_liq params=%s", params)
         return jsonify([])
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def _row_dict_lower(cursor, row):
+    """Convierte una fila pyodbc en dict con claves en minúsculas."""
+    if not cursor.description:
+        return {}
+    return {
+        str(col[0]).strip().lower(): row[i]
+        for i, col in enumerate(cursor.description)
+    }
+
+
+def _row_dict_from_columns(column_names, row):
+    """Igual que _row_dict_lower pero con nombres ya capturados (tras nextset)."""
+    return {
+        str(column_names[i]).strip().lower(): row[i]
+        for i in range(len(column_names))
+    }
+
+
+def _drain_all_cursor_resultsets(cursor):
+    """Consume todos los lotes devueltos por un SP (SET NOCOUNT off, varios SELECT, etc.)."""
+    while True:
+        if cursor.description:
+            try:
+                cursor.fetchall()
+            except Exception:
+                pass
+        if not cursor.nextset():
+            break
+
+
+def _fetch_last_query_resultset(cursor):
+    """
+    SPs con CREATE/INSERT/UPDATE antes del SELECT no dejan un result set en el primer lote;
+    pyodbc exige no hacer fetchall() si no hay consulta. Tomamos el último lote con description.
+    """
+    last_cols = None
+    last_rows = None
+    while True:
+        if cursor.description:
+            last_cols = [str(c[0]).strip() for c in cursor.description]
+            last_rows = cursor.fetchall()
+        if not cursor.nextset():
+            break
+    return last_cols or [], last_rows or []
+
+
+def _float_sp_cell(value):
+    if value is None:
+        return 0.0
+    if isinstance(value, Decimal):
+        return float(value)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+@app.route('/reporte-resumen-total')
+@login_required
+def reporte_resumen_total():
+    return render_template('reporte_resumen_total.html')
+
+
+@app.route('/reporte_resumen_total', methods=['POST'])
+@login_required
+def reporte_resumen_total_post():
+    """sp_pr_reporteplame_total_web: resumen por concepto y tipo (Mensual, Semanal, …)."""
+    body = request.get_json(silent=True) or {}
+    cia = (body.get('cia') or '').strip()
+    payroll_type = (body.get('payroll_type') or '').strip()
+    period = (body.get('period') or '').strip()
+
+    if not cia:
+        return jsonify({"error": "Seleccione una compañía."}), 400
+    if not payroll_type or not period:
+        return jsonify({"error": "Debe indicar tipo de planilla y periodo."}), 400
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "EXEC sp_pr_reporteplame_total_web @cia=?, @payrolltype=?, @period=?, @person=?",
+            (cia, payroll_type, period, None),
+        )
+        col_names, rows = _fetch_last_query_resultset(cursor)
+        resumen = []
+        for row in rows:
+            rd = _row_dict_from_columns(col_names, row)
+            mensual = _float_sp_cell(rd.get('mensual'))
+            semanal = _float_sp_cell(rd.get('semanal'))
+            liquida = _float_sp_cell(rd.get('liquida'))
+            vacaciones = _float_sp_cell(rd.get('vacaciones'))
+            cts = _float_sp_cell(rd.get('cts'))
+            grati = _float_sp_cell(rd.get('grati'))
+            total_fila = mensual + semanal + liquida + vacaciones + cts + grati
+
+            tipo_raw = rd.get('tipo')
+            tipo = tipo_raw.strip() if isinstance(tipo_raw, str) else (str(tipo_raw).strip() if tipo_raw is not None else '')
+
+            pdt_val = rd.get('pdt')
+            concepto_val = rd.get('concepto')
+
+            resumen.append(
+                {
+                    "tipo": tipo,
+                    "pdt": '' if pdt_val is None else str(pdt_val).strip(),
+                    "concepto": '' if concepto_val is None else str(concepto_val).strip(),
+                    "mensual": mensual,
+                    "semanal": semanal,
+                    "liquida": liquida,
+                    "vacaciones": vacaciones,
+                    "cts": cts,
+                    "grati": grati,
+                    "total": total_fila,
+                }
+            )
+        return jsonify(resumen)
+    except Exception as e:
+        logging.exception("reporte_resumen_total_post")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+@app.route('/reporte_planilla_vertical', methods=['POST'])
+@login_required
+def reporte_planilla_vertical_post():
+    """
+    sp_pr_reporteplamevertical_web @cia, @payrolltype, @process, @period, @person.
+    Cabeceras dinámicas desde xx_plamevertical2 + PR_Concept; datos desde xx_reporteplanilla.
+    """
+    body = request.get_json(silent=True) or {}
+    cia = (body.get('cia') or '').strip()
+    payroll_type = (body.get('payroll_type') or body.get('payrolltype') or '').strip()
+    process = (body.get('process') or '').strip()
+    period = _normalize_pr_period(body.get('period'))
+    person = (body.get('person') or '0').strip() or '0'
+
+    if not cia:
+        return jsonify({"error": "Seleccione una compañía."}), 400
+    if not payroll_type or not process or not period:
+        return jsonify({"error": "Debe indicar tipo de planilla, proceso y periodo."}), 400
+
+    static_headers_es = [
+        'Código',
+        'Nombre',
+        'F.Ingreso',
+        'F.Cese',
+        'Cargo',
+        'AFP',
+        'C.Costo',
+        'Cod.Costo',
+        'Unidad',
+        'TipoPago',
+        'Perfil',
+        'Horas',
+        'Banco',
+        'Num. Cuenta',
+    ]
+    static_keys = [
+        'person',
+        'name',
+        'entrydate',
+        'ceasedate',
+        'position',
+        'afp',
+        'ccname',
+        'costcenter',
+        'unidad',
+        'tipopago',
+        'profile',
+        'horas',
+        'banco',
+        'numcuenta',
+    ]
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "EXEC sp_pr_reporteplamevertical_web @cia=?, @payrolltype=?, @process=?, @period=?, @person=?",
+            (cia, payroll_type, process, period, person),
+        )
+        _drain_all_cursor_resultsets(cursor)
+
+        cursor.execute(
+            """
+            SELECT DISTINCT UPPER(PR_Concept.PrintText) AS conceptname, PR_Concept.reporden
+            FROM xx_plamevertical2
+            INNER JOIN PR_Concept ON (
+                xx_plamevertical2.conceptname = PR_Concept.Description
+                AND PR_Concept.Company = ?
+            )
+            ORDER BY PR_Concept.reporden ASC, 1 ASC
+            """,
+            (cia,),
+        )
+        concept_rows = cursor.fetchall()
+        conceptos_dinamicos = []
+        for crow in concept_rows:
+            cname = crow[0] if crow[0] is not None else ''
+            cname = str(cname).strip()
+            if cname:
+                conceptos_dinamicos.append(cname)
+
+        headers = list(static_headers_es) + conceptos_dinamicos
+        num_concepts = len(conceptos_dinamicos)
+
+        # Mismo SELECT que el SP (@grupo = 'N'): no usar SELECT * sobre la tabla,
+        # porque position/costcenter almacenan IDs; el SP expone descripción y CCCode.
+        concept_cols_sql = ", ".join(f"concept{str(i).zfill(2)}" for i in range(1, 66))
+        sql_datos = f"""
+            SELECT
+                person,
+                name,
+                entrydate,
+                ceasedate,
+                (SELECT Description FROM PR_Position WHERE Position = xx_reporteplanilla.position) AS position,
+                afp,
+                (SELECT Description FROM AC_CostCenter WHERE CostCenter = xx_reporteplanilla.costcenter) AS ccname,
+                (SELECT CCCode FROM AC_CostCenter WHERE CostCenter = xx_reporteplanilla.costcenter) AS costcenter,
+                (SELECT Description FROM SY_ReplicationUnit
+                 INNER JOIN SY_Person ON (SY_ReplicationUnit.ReplicationUnit = SY_Person.ReplicationUnit)
+                 WHERE SY_Person.Person = xx_reporteplanilla.person) AS unidad,
+                (SELECT CASE WHEN ISNULL(SY_Person.isrecruiter, 'N') = 'Y' THEN 'H' ELSE 'P' END
+                 FROM sy_person WHERE person = xx_reporteplanilla.person) AS tipopago,
+                (SELECT description FROM PR_AccountProfile
+                 INNER JOIN PR_Employee ON (
+                     PR_AccountProfile.AccountProfile = PR_Employee.AccountProfile
+                     AND PR_AccountProfile.company = ?
+                     AND PR_Employee.Person = xx_reporteplanilla.person)) AS profile,
+                (SELECT SUM(hourday) FROM PR_REGISTERHOUR
+                 WHERE period = ? AND Company = ? AND person = xx_reporteplanilla.person) AS horas,
+                CASE WHEN (
+                    SELECT ShortName FROM PR_ProcessType
+                    WHERE Company = ? AND ProcessType = ?
+                ) = 'CTS' THEN (
+                    SELECT name FROM ERP_Bank
+                    INNER JOIN PR_Employee ON (
+                        ERP_Bank.Bank = PR_Employee.CTSBank
+                        AND ERP_Bank.company = ?
+                        AND PR_Employee.Person = xx_reporteplanilla.person)
+                ) ELSE (
+                    SELECT name FROM ERP_Bank
+                    INNER JOIN PR_Employee ON (
+                        ERP_Bank.Bank = PR_Employee.SalaryBank
+                        AND ERP_Bank.company = ?
+                        AND PR_Employee.Person = xx_reporteplanilla.person)
+                ) END AS banco,
+                CASE WHEN (
+                    SELECT ShortName FROM PR_ProcessType
+                    WHERE Company = ? AND ProcessType = ?
+                ) = 'CTS' THEN (
+                    SELECT CTSAccount FROM PR_Employee
+                    WHERE PR_Employee.Person = xx_reporteplanilla.person AND PR_Employee.Company = ?
+                ) ELSE (
+                    SELECT salaryaccount FROM PR_Employee
+                    WHERE PR_Employee.Person = xx_reporteplanilla.person AND PR_Employee.Company = ?
+                ) END AS numcuenta,
+                {concept_cols_sql}
+            FROM xx_reporteplanilla
+            ORDER BY name
+        """
+        params_datos = (
+            cia,
+            period,
+            cia,
+            cia,
+            process,
+            cia,
+            cia,
+            cia,
+            process,
+            cia,
+            cia,
+        )
+        cursor.execute(sql_datos, params_datos)
+        desc = cursor.description
+        if not desc:
+            return jsonify({"headers": headers, "data": []})
+        col_names = [str(c[0]).strip().lower() for c in desc]
+        rows = cursor.fetchall()
+
+        resultado = []
+        for row in rows:
+            rd = {col_names[i]: row[i] for i in range(len(col_names))}
+            fila = []
+            for key in static_keys:
+                fila.append(_jsonable_value(rd.get(key)))
+            for i in range(num_concepts):
+                cn = f"concept{str(i + 1).zfill(2)}"
+                fila.append(_float_sp_cell(rd.get(cn)))
+            resultado.append(fila)
+
+        return jsonify({"headers": headers, "data": resultado})
+    except Exception as e:
+        logging.exception("reporte_planilla_vertical_post")
+        return jsonify({"error": str(e)}), 500
     finally:
         if conn:
             try:
