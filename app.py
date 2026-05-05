@@ -172,6 +172,29 @@ def _is_comm_link_failure(err):
     return ("08s01" in s) or ("communication link failure" in s)
 
 
+def _is_transient_sql_error(err):
+    """Errores reintentables: enlace caído o timeout de comando."""
+    s = str(err or "").lower()
+    return _is_comm_link_failure(err) or ("hyt00" in s) or ("timeout expired" in s)
+
+
+def _sql_call_timeout_seconds():
+    raw = str(os.getenv("SQL_CALL_TIMEOUT_SEC", "35")).strip()
+    try:
+        n = int(raw)
+    except Exception:
+        n = 35
+    return max(10, min(n, 180))
+
+
+def _set_cursor_timeout(cursor):
+    """Timeout por ejecución de SP (segundos) para evitar cuelgues largos."""
+    try:
+        cursor.timeout = _sql_call_timeout_seconds()
+    except Exception:
+        logging.debug("No se pudo fijar timeout en cursor", exc_info=True)
+
+
 @login_manager.user_loader
 def load_user(user_id):
     return User.get_user_by_id(user_id)
@@ -888,6 +911,7 @@ def ejecutar_calculo_planilla():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
+        _set_cursor_timeout(cursor)
         cursor.execute(
             """
             SELECT ProcedureName
@@ -930,9 +954,9 @@ def ejecutar_calculo_planilla():
                 conn.commit()
                 exitos += 1
             except Exception as e_individual:
-                if _is_comm_link_failure(e_individual):
+                if _is_transient_sql_error(e_individual):
                     logging.warning(
-                        'ejecutar_calculo_planilla persona %s: caída de enlace; reintentando 1 vez',
+                        'ejecutar_calculo_planilla persona %s: error transitorio; reintentando 1 vez',
                         pid,
                     )
                     try:
@@ -942,6 +966,7 @@ def ejecutar_calculo_planilla():
                             pass
                         conn = get_db_connection()
                         cursor = conn.cursor()
+                        _set_cursor_timeout(cursor)
                         cursor.execute(
                             call_sql,
                             (cia, payroll_type, processtype, period, pid, user_id, tc),
@@ -1020,6 +1045,7 @@ def ejecutar_calculo_streaming():
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
+            _set_cursor_timeout(cursor)
             cursor.execute(
                 """
                 SELECT ProcedureName
@@ -1055,6 +1081,20 @@ def ejecutar_calculo_streaming():
             call_sql = f'{{CALL {sp_name} (?, ?, ?, ?, ?, ?, ?)}}'
 
             for index, pid in enumerate(lista):
+                # Heartbeat previo para mantener vivo el stream detrás de proxies.
+                yield (
+                    "data: "
+                    + json.dumps(
+                        {
+                            "actual": index + 1,
+                            "total": total,
+                            "progreso": int((index / total) * 100),
+                            "person": pid,
+                            "stage": "start",
+                        }
+                    )
+                    + "\n\n"
+                )
                 try:
                     cursor.execute(
                         call_sql,
@@ -1069,9 +1109,9 @@ def ejecutar_calculo_streaming():
                         'total': total,
                     }
                 except Exception as e_individual:
-                    if _is_comm_link_failure(e_individual):
+                    if _is_transient_sql_error(e_individual):
                         logging.warning(
-                            'ejecutar_calculo_streaming persona %s: caída de enlace; reintentando 1 vez',
+                            'ejecutar_calculo_streaming persona %s: error transitorio; reintentando 1 vez',
                             pid,
                         )
                         try:
@@ -1081,6 +1121,7 @@ def ejecutar_calculo_streaming():
                                 pass
                             conn = get_db_connection()
                             cursor = conn.cursor()
+                            _set_cursor_timeout(cursor)
                             cursor.execute(
                                 call_sql,
                                 (cia, payroll_type, processtype, period, pid, user_id, tc),

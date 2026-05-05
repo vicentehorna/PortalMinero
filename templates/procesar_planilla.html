@@ -94,6 +94,7 @@
                     aria-valuemax="100"
                 ></div>
             </div>
+            <div id="progreso-detalle-error" class="small text-danger mt-2 d-none"></div>
         </div>
 
         <div class="table-scroll-container">
@@ -368,12 +369,17 @@ document.addEventListener('DOMContentLoaded', async function () {
         const barra = document.getElementById('barra-progreso');
         const pct = document.getElementById('progreso-porcentaje');
         const label = document.getElementById('progreso-label');
+        const err = document.getElementById('progreso-detalle-error');
         if (barra) {
             barra.style.width = '0%';
             barra.setAttribute('aria-valuenow', '0');
         }
         if (pct) pct.textContent = '0%';
         if (label) label.textContent = 'Procesando trabajadores…';
+        if (err) {
+            err.textContent = '';
+            err.classList.add('d-none');
+        }
     }
 
     async function iniciarCalculo() {
@@ -398,6 +404,7 @@ document.addEventListener('DOMContentLoaded', async function () {
         const barra = document.getElementById('barra-progreso');
         const label = document.getElementById('progreso-label');
         const porcentajeTxt = document.getElementById('progreso-porcentaje');
+        const detalleErr = document.getElementById('progreso-detalle-error');
         const btn = document.getElementById('btnCalcular');
 
         resetBarraProgreso();
@@ -479,6 +486,12 @@ document.addEventListener('DOMContentLoaded', async function () {
                         porcentajeTxt.textContent = ps;
                         label.textContent =
                             'Procesando: ' + data.actual + ' de ' + data.total + (data.detalle ? ' (último con aviso)' : '');
+                        if (data.detalle) {
+                            const pidTxt = data.person ? String(data.person) : '(sin código)';
+                            detalleErr.textContent =
+                                'Trabajador con incidencia: ' + pidTxt + ' — ' + String(data.detalle);
+                            detalleErr.classList.remove('d-none');
+                        }
                     }
                 }
             };
