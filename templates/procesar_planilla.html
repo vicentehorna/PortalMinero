@@ -393,6 +393,10 @@ document.addEventListener('DOMContentLoaded', async function () {
         });
     }
 
+    function esperar(ms) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
     async function iniciarCalculo() {
         const checks = document.querySelectorAll('.check-trabajador:checked');
         const listaPerson = Array.from(checks)
@@ -493,7 +497,10 @@ document.addEventListener('DOMContentLoaded', async function () {
                 barra.setAttribute('aria-valuenow', '100');
                 porcentajeTxt.textContent = '100%';
                 label.textContent = `Procesando: ${listaPerson.length} de ${listaPerson.length}`;
+                // Doble frame + micro pausa: evita que alert bloquee el último repintado en algunos navegadores/proxies.
                 await esperarRepintadoUI();
+                await esperarRepintadoUI();
+                await esperar(120);
 
                 let msg = `Cálculo finalizado. Éxitos: ${totalExitos}, errores: ${totalErrores}.`;
                 if (detallesTotales.length) {
