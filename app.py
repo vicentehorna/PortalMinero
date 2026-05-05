@@ -166,6 +166,12 @@ def _drain_pyodbc_cursor(cursor):
         logging.debug("drenado de cursor", exc_info=True)
 
 
+def _is_comm_link_failure(err):
+    """Detecta caídas transitorias de enlace ODBC/SQL Server."""
+    s = str(err or "").lower()
+    return ("08s01" in s) or ("communication link failure" in s)
+
+
 @login_manager.user_loader
 def load_user(user_id):
     return User.get_user_by_id(user_id)
@@ -924,12 +930,44 @@ def ejecutar_calculo_planilla():
                 conn.commit()
                 exitos += 1
             except Exception as e_individual:
-                try:
-                    conn.rollback()
-                except Exception:
-                    pass
-                errores.append(f'Error en {pid}: {e_individual}')
-                logging.warning('ejecutar_calculo_planilla persona %s: %s', pid, e_individual)
+                if _is_comm_link_failure(e_individual):
+                    logging.warning(
+                        'ejecutar_calculo_planilla persona %s: caída de enlace; reintentando 1 vez',
+                        pid,
+                    )
+                    try:
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
+                        conn = get_db_connection()
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            call_sql,
+                            (cia, payroll_type, processtype, period, pid, user_id, tc),
+                        )
+                        _drain_pyodbc_cursor(cursor)
+                        conn.commit()
+                        exitos += 1
+                        continue
+                    except Exception as e_retry:
+                        try:
+                            conn.rollback()
+                        except Exception:
+                            pass
+                        errores.append(f'Error en {pid}: {e_retry}')
+                        logging.warning(
+                            'ejecutar_calculo_planilla persona %s fallo en reintento: %s',
+                            pid,
+                            e_retry,
+                        )
+                else:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    errores.append(f'Error en {pid}: {e_individual}')
+                    logging.warning('ejecutar_calculo_planilla persona %s: %s', pid, e_individual)
 
         status = 'success' if not errores else 'partial'
         message = f'Proceso terminado. Éxitos: {exitos}, Errores: {len(errores)}.'
@@ -1031,20 +1069,64 @@ def ejecutar_calculo_streaming():
                         'total': total,
                     }
                 except Exception as e_individual:
-                    try:
-                        conn.rollback()
-                    except Exception:
-                        pass
-                    msg = str(e_individual)
-                    errores.append(f'Error en {pid}: {msg}')
-                    logging.warning('ejecutar_calculo_streaming persona %s: %s', pid, e_individual)
-                    evento = {
-                        'progreso': int(((index + 1) / total) * 100),
-                        'actual': index + 1,
-                        'total': total,
-                        'detalle': msg,
-                        'person': pid,
-                    }
+                    if _is_comm_link_failure(e_individual):
+                        logging.warning(
+                            'ejecutar_calculo_streaming persona %s: caída de enlace; reintentando 1 vez',
+                            pid,
+                        )
+                        try:
+                            try:
+                                conn.close()
+                            except Exception:
+                                pass
+                            conn = get_db_connection()
+                            cursor = conn.cursor()
+                            cursor.execute(
+                                call_sql,
+                                (cia, payroll_type, processtype, period, pid, user_id, tc),
+                            )
+                            _drain_pyodbc_cursor(cursor)
+                            conn.commit()
+                            exitos += 1
+                            evento = {
+                                'progreso': int(((index + 1) / total) * 100),
+                                'actual': index + 1,
+                                'total': total,
+                            }
+                        except Exception as e_retry:
+                            try:
+                                conn.rollback()
+                            except Exception:
+                                pass
+                            msg = str(e_retry)
+                            errores.append(f'Error en {pid}: {msg}')
+                            logging.warning(
+                                'ejecutar_calculo_streaming persona %s fallo en reintento: %s',
+                                pid,
+                                e_retry,
+                            )
+                            evento = {
+                                'progreso': int(((index + 1) / total) * 100),
+                                'actual': index + 1,
+                                'total': total,
+                                'detalle': msg,
+                                'person': pid,
+                            }
+                    else:
+                        try:
+                            conn.rollback()
+                        except Exception:
+                            pass
+                        msg = str(e_individual)
+                        errores.append(f'Error en {pid}: {msg}')
+                        logging.warning('ejecutar_calculo_streaming persona %s: %s', pid, e_individual)
+                        evento = {
+                            'progreso': int(((index + 1) / total) * 100),
+                            'actual': index + 1,
+                            'total': total,
+                            'detalle': msg,
+                            'person': pid,
+                        }
 
                 yield f'data: {json.dumps(evento)}\n\n'
 
