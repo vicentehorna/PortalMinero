@@ -6,6 +6,7 @@
     const STORAGE_KEY_RESUMEN_TOTAL = 'filtros_resumen_total';
     const STORAGE_KEY_PROMEDIO_LIQ = 'filtros_promedio_liq';
     const STORAGE_KEY_PLANILLA_VERTICAL = 'filtros_planilla_vertical';
+    const STORAGE_KEY_PROCESAR_PLANILLA = 'filtros_procesar_planilla';
 
     function val(id) {
         const el = document.getElementById(id);
@@ -139,10 +140,75 @@
         };
     }
 
+    function valHidden(id) {
+        const el = document.getElementById(id);
+        return el && el.value != null ? String(el.value).trim() : '';
+    }
+
+    function crearPersistenciaProcesarPlanilla() {
+        function guardar() {
+            try {
+                const seleccionPersonas = [];
+                document.querySelectorAll('.check-trabajador:checked').forEach((c) => {
+                    seleccionPersonas.push(String(c.value).trim());
+                });
+                const estado = {
+                    cia: val('cboCompania'),
+                    payroll: val('cboTipoPlanilla'),
+                    proceso: val('cboProcesoCalculo'),
+                    periodo: valHidden('hidPeriodoCalculo'),
+                    seleccionPersonas: seleccionPersonas,
+                    timestamp: Date.now()
+                };
+                localStorage.setItem(STORAGE_KEY_PROCESAR_PLANILLA, JSON.stringify(estado));
+            } catch (e) {
+                console.warn('filtros procesar planilla: no se pudo guardar', e);
+            }
+        }
+
+        function leer() {
+            try {
+                const raw = localStorage.getItem(STORAGE_KEY_PROCESAR_PLANILLA);
+                if (!raw) return null;
+                const o = JSON.parse(raw);
+                if (!o || typeof o !== 'object') return null;
+                return o;
+            } catch (e) {
+                return null;
+            }
+        }
+
+        function registrarGuardadoEnCambio() {
+            ['cboCompania', 'cboTipoPlanilla', 'cboProcesoCalculo'].forEach((id) => {
+                const el = document.getElementById(id);
+                if (el) el.addEventListener('change', guardar);
+            });
+            const chkAll = document.getElementById('checkAll');
+            if (chkAll) chkAll.addEventListener('change', guardar);
+            const tbody = document.getElementById('tbodyTrabajadores');
+            if (tbody) {
+                tbody.addEventListener('change', function (e) {
+                    const t = e.target;
+                    if (t && t.classList && t.classList.contains('check-trabajador')) guardar();
+                });
+            }
+        }
+
+        return {
+            STORAGE_KEY: STORAGE_KEY_PROCESAR_PLANILLA,
+            guardar,
+            leer,
+            registrarGuardadoEnCambio
+        };
+    }
+
     global.FiltrosPlanillasReportes = {
         STORAGE_KEY_RESUMEN_TOTAL,
         STORAGE_KEY_PROMEDIO_LIQ,
         STORAGE_KEY_PLANILLA_VERTICAL,
+        STORAGE_KEY_PROCESAR_PLANILLA,
+        /** Misma lógica que optionExists interno (valor y option.value con trim). */
+        optionExistsTrim: optionExists,
         resumenTotal: function () {
             return crearPersistenciaReporte(STORAGE_KEY_RESUMEN_TOTAL, false);
         },
@@ -151,6 +217,9 @@
         },
         planillaVertical: function () {
             return crearPersistenciaReporte(STORAGE_KEY_PLANILLA_VERTICAL, true);
+        },
+        procesarPlanilla: function () {
+            return crearPersistenciaProcesarPlanilla();
         }
     };
 })(typeof window !== 'undefined' ? window : this);

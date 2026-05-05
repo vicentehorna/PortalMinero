@@ -1,0 +1,613 @@
+{% extends "layout.html" %}
+
+{% block title %}Procesar planilla{% endblock %}
+
+{% block extra_css %}
+<style>
+    /* Mismas reglas que Planilla vertical (listado denso) */
+    .table-scroll-container {
+        max-height: 65vh;
+        overflow: auto;
+        border: 1px solid #dee2e6;
+    }
+
+    .table-planilla-vertical {
+        --sticky-col1-w: 5.75rem;
+        font-size: 11px;
+        white-space: nowrap;
+        margin-bottom: 0;
+    }
+
+    .table-planilla-vertical th,
+    .table-planilla-vertical td {
+        padding: 0.2rem 0.4rem;
+        vertical-align: middle;
+    }
+
+    .table-planilla-vertical thead th {
+        position: sticky;
+        top: 0;
+        background-color: #f8f9fa;
+        z-index: 2;
+        box-shadow: 0 1px 0 #dee2e6;
+    }
+
+    .table-planilla-vertical .form-check-input {
+        width: 0.75rem;
+        height: 0.75rem;
+        margin: 0;
+        vertical-align: middle;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="card shadow-sm border-0 mb-4">
+    <div class="card-header bg-white border-bottom-0 pt-4 pb-0">
+        <h5 class="mb-0 fw-bold text-secondary"><i class="bi bi-gear-wide-connected"></i> Procesar planilla</h5>
+    </div>
+    <div class="card-body">
+        <div class="row g-3 align-items-end mb-2">
+            <div class="col-md-3">
+                <label for="cboCompania" class="form-label small fw-bold text-muted">Compañía</label>
+                <select id="cboCompania" class="form-select form-select-sm" required>
+                    <option value="">Seleccione...</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label for="cboTipoPlanilla" class="form-label small fw-bold text-muted">Tipo planilla</label>
+                <select id="cboTipoPlanilla" class="form-select form-select-sm" required disabled>
+                    <option value="">Seleccione...</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label for="cboProcesoCalculo" class="form-label small fw-bold text-muted">Proceso</label>
+                <select id="cboProcesoCalculo" class="form-select form-select-sm" required disabled>
+                    <option value="">Seleccione...</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label for="txtPeriodoDesc" class="form-label small fw-bold text-muted">Periodo</label>
+                <input type="text" id="txtPeriodoDesc" class="form-control form-control-sm" readonly autocomplete="off" placeholder="—">
+                <input type="hidden" id="hidPeriodoCalculo" value="">
+            </div>
+            <div class="col-md-1 d-grid">
+                <button type="button" class="btn btn-primary btn-sm" id="btnListarTrabajadores" title="Listar trabajadores">
+                    <i class="bi bi-search"></i>
+                </button>
+            </div>
+        </div>
+
+        <div id="container-progreso" class="mb-3 d-none" aria-live="polite">
+            <div class="d-flex justify-content-between mb-1">
+                <span id="progreso-label" class="small fw-bold text-muted">Procesando trabajadores…</span>
+                <span id="progreso-porcentaje" class="small fw-bold text-muted">0%</span>
+            </div>
+            <div class="progress" style="height: 20px;">
+                <div
+                    id="barra-progreso"
+                    class="progress-bar progress-bar-striped progress-bar-animated bg-success"
+                    role="progressbar"
+                    style="width: 0%;"
+                    aria-valuenow="0"
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                ></div>
+            </div>
+        </div>
+
+        <div class="table-scroll-container">
+            <table class="table table-bordered table-sm table-hover table-planilla-vertical align-middle">
+                <thead>
+                    <tr>
+                        <th style="width: 2.5rem;" class="text-center">
+                            <input type="checkbox" id="checkAll" class="form-check-input" title="Marcar / desmarcar todos">
+                        </th>
+                        <th style="width: 7rem;">Código</th>
+                        <th>Nombre del trabajador</th>
+                    </tr>
+                </thead>
+                <tbody id="tbodyTrabajadores"></tbody>
+            </table>
+        </div>
+
+        <div class="mt-3 d-flex justify-content-between align-items-center">
+            <span class="text-muted small" id="lblTrabajadoresCount">0 trabajadores</span>
+            <button type="button" id="btnCalcular" class="btn btn-success btn-sm px-3" disabled>
+                <i class="bi bi-calculator"></i> Calcular planilla
+            </button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/filtros_reportes_planillas.js') }}"></script>
+<script>
+document.addEventListener('DOMContentLoaded', async function () {
+    const filtrosPersist = window.FiltrosPlanillasReportes && window.FiltrosPlanillasReportes.procesarPlanilla
+        ? window.FiltrosPlanillasReportes.procesarPlanilla()
+        : null;
+
+    const URL_PROCESOS = {{ url_for('api_procesar_planilla_procesos') | tojson }};
+    const URL_PERIODOS = {{ url_for('api_procesar_planilla_periodos_list') | tojson }};
+    const URL_TRABAJADORES = {{ url_for('api_procesar_planilla_trabajadores') | tojson }};
+    const URL_EJECUTAR_STREAMING = {{ url_for('ejecutar_calculo_streaming') | tojson }};
+
+    const DEFAULT_CIA = 'BGT';
+    const cboCia = document.getElementById('cboCompania');
+    const cboPt = document.getElementById('cboTipoPlanilla');
+    const cboProc = document.getElementById('cboProcesoCalculo');
+
+    function limpiarValorComboSiObsoleto(select) {
+        if (!select) return;
+        const v = String(select.value || '').trim();
+        if (!v) return;
+        const ok = Array.from(select.options).some((o) => String(o.value).trim() === v);
+        if (!ok) select.value = '';
+    }
+
+    function seleccionarCompaniaInsensitive(select, codigoDeseado) {
+        if (!select) return false;
+        const want = String(codigoDeseado || '').trim().toUpperCase();
+        if (!want) return false;
+        const opt = Array.from(select.options).find((o) => String(o.value || '').trim().toUpperCase() === want);
+        if (!opt) return false;
+        select.value = opt.value;
+        return true;
+    }
+
+    function limpiarTablaTrabajadores() {
+        document.getElementById('tbodyTrabajadores').innerHTML = '';
+        const chk = document.getElementById('checkAll');
+        chk.checked = false;
+        chk.indeterminate = false;
+        document.getElementById('lblTrabajadoresCount').textContent = '0 trabajadores';
+        validarBotonCalcular();
+    }
+
+    function validarBotonCalcular() {
+        const n = document.querySelectorAll('.check-trabajador:checked').length;
+        document.getElementById('btnCalcular').disabled = n === 0;
+    }
+
+    function sincronizarCheckAll() {
+        const all = document.querySelectorAll('.check-trabajador');
+        const chk = document.getElementById('checkAll');
+        if (!chk) return;
+        if (!all.length) {
+            chk.checked = false;
+            chk.indeterminate = false;
+            return;
+        }
+        let c = 0;
+        all.forEach((x) => { if (x.checked) c++; });
+        chk.checked = c === all.length;
+        chk.indeterminate = c > 0 && c < all.length;
+    }
+
+    function toggleAll(source) {
+        document.querySelectorAll('.check-trabajador').forEach((x) => { x.checked = source.checked; });
+        validarBotonCalcular();
+        if (filtrosPersist) filtrosPersist.guardar();
+    }
+
+    document.getElementById('checkAll').addEventListener('change', function () {
+        toggleAll(this);
+    });
+
+    const poblarSelect = async (url, selectElement) => {
+        if (!selectElement) return;
+        selectElement.innerHTML = '';
+        const loading = document.createElement('option');
+        loading.value = '';
+        loading.textContent = 'Cargando...';
+        selectElement.appendChild(loading);
+        try {
+            const res = await fetch(url);
+            const data = await res.json();
+            selectElement.innerHTML = '';
+            const def = document.createElement('option');
+            def.value = '';
+            def.textContent = 'Seleccione...';
+            selectElement.appendChild(def);
+            (Array.isArray(data) ? data : []).forEach((item) => {
+                const opt = document.createElement('option');
+                opt.value = item.id != null ? String(item.id) : '';
+                opt.textContent = item.text != null ? String(item.text) : '';
+                selectElement.appendChild(opt);
+            });
+            selectElement.disabled = false;
+        } catch (err) {
+            console.error(err);
+            selectElement.innerHTML = '<option value="">Error</option>';
+        }
+    };
+
+    async function cargarProcesos() {
+        const cia = cboCia.value.trim();
+        const pt = cboPt.value.trim();
+        cboProc.innerHTML = '<option value="">Seleccione...</option>';
+        document.getElementById('hidPeriodoCalculo').value = '';
+        document.getElementById('txtPeriodoDesc').value = '';
+        limpiarTablaTrabajadores();
+        if (!cia || !pt) {
+            cboProc.disabled = true;
+            return;
+        }
+        cboProc.disabled = false;
+        try {
+            const res = await fetch(URL_PROCESOS, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cia, payrolltype: pt })
+            });
+            const data = await res.json();
+            (Array.isArray(data) ? data : []).forEach((item) => {
+                const opt = document.createElement('option');
+                opt.value = item.id != null ? String(item.id) : '';
+                opt.textContent = item.text != null ? String(item.text) : '';
+                cboProc.appendChild(opt);
+            });
+        } catch (e) {
+            console.error(e);
+            cboProc.innerHTML = '<option value="">Error</option>';
+        }
+    }
+
+    async function cargarPeriodo(periodoPreferido) {
+        const cia = cboCia.value.trim();
+        const proc = cboProc.value.trim();
+        const hid = document.getElementById('hidPeriodoCalculo');
+        const txt = document.getElementById('txtPeriodoDesc');
+        hid.value = '';
+        txt.value = '';
+        if (!cia || !proc) return;
+        try {
+            const res = await fetch(
+                `${URL_PERIODOS}?cia=${encodeURIComponent(cia)}&processtype=${encodeURIComponent(proc)}`
+            );
+            const data = await res.json();
+            const arr = Array.isArray(data) ? data : [];
+            let pick = arr[0] || null;
+            if (periodoPreferido) {
+                const want = String(periodoPreferido).trim();
+                const found = arr.find((p) => String(p.id).trim() === want);
+                if (found) pick = found;
+            }
+            if (pick) {
+                hid.value = String(pick.id || '');
+                txt.value = String(pick.text || '');
+            }
+        } catch (e) {
+            console.error(e);
+        }
+    }
+
+    async function listarTrabajadores(opciones) {
+        opciones = opciones || {};
+        const restoreIds = opciones.seleccionPersonas;
+        const cia = cboCia.value.trim();
+        const payrolltype = cboPt.value.trim();
+        const period = document.getElementById('hidPeriodoCalculo').value.trim();
+        if (!cia || !payrolltype || !period) {
+            alert('Seleccione compañía, tipo de planilla, proceso y periodo (válido) antes de listar.');
+            return;
+        }
+        const tbody = document.getElementById('tbodyTrabajadores');
+        tbody.innerHTML = '';
+        document.getElementById('checkAll').checked = false;
+        document.getElementById('checkAll').indeterminate = false;
+        try {
+            const res = await fetch(URL_TRABAJADORES, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cia, payrolltype, period })
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                alert(data.error || 'Error al listar trabajadores.');
+                return;
+            }
+            if (!Array.isArray(data)) {
+                alert('Respuesta inválida del servidor.');
+                return;
+            }
+            const want = restoreIds && Array.isArray(restoreIds) ? new Set(restoreIds.map((x) => String(x).trim())) : null;
+            data.forEach((t) => {
+                const tr = document.createElement('tr');
+                const td0 = document.createElement('td');
+                td0.className = 'text-center';
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.className = 'check-trabajador form-check-input';
+                const pid = String(t.person || '').trim();
+                cb.value = pid;
+                if (want && want.has(pid)) cb.checked = true;
+                td0.appendChild(cb);
+                const td1 = document.createElement('td');
+                td1.className = 'font-monospace';
+                td1.textContent = pid;
+                const td2 = document.createElement('td');
+                td2.textContent = String(t.name || '').trim();
+                tr.appendChild(td0);
+                tr.appendChild(td1);
+                tr.appendChild(td2);
+                tbody.appendChild(tr);
+            });
+            document.getElementById('lblTrabajadoresCount').textContent =
+                data.length === 1 ? '1 trabajador' : `${data.length} trabajadores`;
+            sincronizarCheckAll();
+            validarBotonCalcular();
+            if (filtrosPersist) filtrosPersist.guardar();
+        } catch (e) {
+            console.error(e);
+            alert('Error de red o del servidor.');
+        }
+    }
+
+    function setUiCalculoEnCurso(enCurso) {
+        const ids = [
+            'cboCompania',
+            'cboTipoPlanilla',
+            'cboProcesoCalculo',
+            'txtPeriodoDesc',
+            'btnListarTrabajadores',
+            'checkAll'
+        ];
+        ids.forEach((id) => {
+            const el = document.getElementById(id);
+            if (el) el.disabled = enCurso;
+        });
+        document.querySelectorAll('.check-trabajador').forEach((cb) => {
+            cb.disabled = enCurso;
+        });
+    }
+
+    function resetBarraProgreso() {
+        const barra = document.getElementById('barra-progreso');
+        const pct = document.getElementById('progreso-porcentaje');
+        const label = document.getElementById('progreso-label');
+        if (barra) {
+            barra.style.width = '0%';
+            barra.setAttribute('aria-valuenow', '0');
+        }
+        if (pct) pct.textContent = '0%';
+        if (label) label.textContent = 'Procesando trabajadores…';
+    }
+
+    async function iniciarCalculo() {
+        const checks = document.querySelectorAll('.check-trabajador:checked');
+        const listaPerson = Array.from(checks)
+            .map((c) => String(c.value).trim())
+            .filter(Boolean);
+        if (!listaPerson.length) {
+            alert('Seleccione al menos un trabajador.');
+            return;
+        }
+        const cia = cboCia.value.trim();
+        const payroll_type = cboPt.value.trim();
+        const processtype = cboProc.value.trim();
+        const period = document.getElementById('hidPeriodoCalculo').value.trim();
+        if (!cia || !payroll_type || !processtype || !period) {
+            alert('Complete compañía, tipo de planilla, proceso y periodo antes de calcular.');
+            return;
+        }
+
+        const container = document.getElementById('container-progreso');
+        const barra = document.getElementById('barra-progreso');
+        const label = document.getElementById('progreso-label');
+        const porcentajeTxt = document.getElementById('progreso-porcentaje');
+        const btn = document.getElementById('btnCalcular');
+
+        resetBarraProgreso();
+        container.classList.remove('d-none');
+        btn.disabled = true;
+        setUiCalculoEnCurso(true);
+
+        let huboErrorFatal = false;
+        let resumenFinal = null;
+
+        try {
+            const response = await fetch(URL_EJECUTAR_STREAMING, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    cia: cia,
+                    processtype: processtype,
+                    payroll_type: payroll_type,
+                    period: period,
+                    trabajadores: listaPerson
+                })
+            });
+
+            if (!response.ok) {
+                let err = {};
+                try {
+                    err = await response.json();
+                } catch (ignore) {
+                    err = {};
+                }
+                alert(err.error || 'No se pudo iniciar el cálculo.');
+                huboErrorFatal = true;
+                return;
+            }
+
+            if (!response.body || !response.body.getReader) {
+                alert('El navegador no permite leer el flujo de progreso.');
+                huboErrorFatal = true;
+                return;
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            const procesarBloqueSSE = (bloque) => {
+                const lineas = bloque.split(/\r?\n/);
+                for (const linea of lineas) {
+                    if (!linea.startsWith('data:')) continue;
+                    const payload = linea.replace(/^data:\s?/, '').trim();
+                    if (!payload) continue;
+                    let data;
+                    try {
+                        data = JSON.parse(payload);
+                    } catch (e) {
+                        console.warn('SSE JSON inválido', payload);
+                        continue;
+                    }
+                    if (data.error) {
+                        alert('Error: ' + data.error);
+                        huboErrorFatal = true;
+                        return;
+                    }
+                    if (data.done) {
+                        resumenFinal = data;
+                        return;
+                    }
+                    if (typeof data.progreso === 'number') {
+                        const p = Math.min(100, Math.max(0, data.progreso));
+                        const ps = p + '%';
+                        barra.style.width = ps;
+                        barra.setAttribute('aria-valuenow', String(p));
+                        porcentajeTxt.textContent = ps;
+                        label.textContent =
+                            'Procesando: ' + data.actual + ' de ' + data.total + (data.detalle ? ' (último con aviso)' : '');
+                    }
+                }
+            };
+
+            while (true) {
+                const { value, done } = await reader.read();
+                buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+
+                let sep;
+                while ((sep = buffer.indexOf('\n\n')) >= 0) {
+                    const bloque = buffer.slice(0, sep);
+                    buffer = buffer.slice(sep + 2);
+                    procesarBloqueSSE(bloque);
+                    if (huboErrorFatal || resumenFinal) break;
+                }
+                if (huboErrorFatal || resumenFinal) break;
+                if (done) {
+                    if (buffer.trim()) procesarBloqueSSE(buffer);
+                    break;
+                }
+            }
+
+            if (!huboErrorFatal && resumenFinal) {
+                let msg =
+                    'Cálculo finalizado. Éxitos: ' +
+                    resumenFinal.exitos +
+                    ', errores: ' +
+                    resumenFinal.errores +
+                    '.';
+                if (resumenFinal.detalles && resumenFinal.detalles.length) {
+                    msg += '\n\n' + resumenFinal.detalles.slice(0, 10).join('\n');
+                    if (resumenFinal.detalles.length > 10) msg += '\n…';
+                }
+                alert(msg);
+            } else if (!huboErrorFatal && !resumenFinal) {
+                alert('La respuesta terminó sin confirmación del servidor.');
+            }
+        } catch (error) {
+            console.error(error);
+            alert('Ocurrió un error en la comunicación con el servidor.');
+        } finally {
+            container.classList.add('d-none');
+            resetBarraProgreso();
+            setUiCalculoEnCurso(false);
+            validarBotonCalcular();
+        }
+    }
+
+    document.getElementById('btnListarTrabajadores').addEventListener('click', function () {
+        listarTrabajadores();
+    });
+    document.getElementById('btnCalcular').addEventListener('click', function () {
+        iniciarCalculo();
+    });
+
+    document.getElementById('tbodyTrabajadores').addEventListener('change', function (e) {
+        const t = e.target;
+        if (t && t.classList && t.classList.contains('check-trabajador')) {
+            sincronizarCheckAll();
+            validarBotonCalcular();
+        }
+    });
+
+    await poblarSelect('/api/selectores/companias', cboCia);
+    limpiarValorComboSiObsoleto(cboCia);
+
+    const guardado = filtrosPersist ? filtrosPersist.leer() : null;
+    const optEx = window.FiltrosPlanillasReportes && window.FiltrosPlanillasReportes.optionExistsTrim;
+
+    let restaurado = false;
+    if (guardado && guardado.cia && optEx && optEx(cboCia, guardado.cia)) {
+        cboCia.value = String(guardado.cia).trim();
+        await poblarSelect(`/api/selectores/planillas?cia=${encodeURIComponent(cboCia.value.trim())}`, cboPt);
+        const payroll = guardado.payroll != null ? String(guardado.payroll).trim() : '';
+        if (payroll && optEx(cboPt, payroll)) {
+            cboPt.value = payroll;
+            await cargarProcesos();
+            const proceso = guardado.proceso != null ? String(guardado.proceso).trim() : '';
+            if (proceso && optEx(cboProc, proceso)) {
+                cboProc.value = proceso;
+                const perSaved = guardado.periodo != null ? String(guardado.periodo).trim() : '';
+                await cargarPeriodo(perSaved || undefined);
+                const hid = document.getElementById('hidPeriodoCalculo').value.trim();
+                if (hid) {
+                    await listarTrabajadores({ seleccionPersonas: guardado.seleccionPersonas || [] });
+                    restaurado = true;
+                }
+            }
+        }
+    }
+
+    if (!restaurado && !String(cboCia.value || '').trim()) {
+        if (seleccionarCompaniaInsensitive(cboCia, DEFAULT_CIA)) {
+            await poblarSelect(`/api/selectores/planillas?cia=${encodeURIComponent(cboCia.value.trim())}`, cboPt);
+        }
+    }
+
+    limpiarValorComboSiObsoleto(cboCia);
+    limpiarValorComboSiObsoleto(cboPt);
+
+    document.getElementById('cboCompania').addEventListener('change', async function () {
+        const cia = this.value.trim();
+        cboProc.innerHTML = '<option value="">Seleccione...</option>';
+        cboProc.disabled = true;
+        document.getElementById('hidPeriodoCalculo').value = '';
+        document.getElementById('txtPeriodoDesc').value = '';
+        limpiarTablaTrabajadores();
+        if (cia) {
+            await poblarSelect(`/api/selectores/planillas?cia=${encodeURIComponent(cia)}`, cboPt);
+        } else {
+            cboPt.innerHTML = '<option value="">Seleccione...</option>';
+            cboPt.disabled = true;
+        }
+        if (filtrosPersist) filtrosPersist.guardar();
+    });
+
+    document.getElementById('cboTipoPlanilla').addEventListener('change', async function () {
+        document.getElementById('hidPeriodoCalculo').value = '';
+        document.getElementById('txtPeriodoDesc').value = '';
+        limpiarTablaTrabajadores();
+        await cargarProcesos();
+        if (filtrosPersist) filtrosPersist.guardar();
+    });
+
+    document.getElementById('cboProcesoCalculo').addEventListener('change', async function () {
+        document.getElementById('hidPeriodoCalculo').value = '';
+        document.getElementById('txtPeriodoDesc').value = '';
+        limpiarTablaTrabajadores();
+        await cargarPeriodo();
+        if (filtrosPersist) filtrosPersist.guardar();
+    });
+
+    if (filtrosPersist) {
+        filtrosPersist.registrarGuardadoEnCambio();
+    }
+});
+</script>
+{% endblock %}

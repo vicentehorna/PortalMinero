@@ -1,10 +1,12 @@
+import json
 import os
+import re
 import sys
 import logging
 from datetime import date, datetime
 from decimal import Decimal
 
-from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify
+from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, Response
 from flask_login import LoginManager, login_user, login_required, logout_user, current_user
 from dotenv import load_dotenv
 
@@ -115,6 +117,55 @@ def _fetch_first_nonempty_resultset(cursor):
     return columns, []
 
 
+def _dicts_first_nonempty_resultset(cursor):
+    """
+    Igual que _fetch_first_nonempty_resultset pero devuelve filas como dicts
+    con claves en minúsculas (robusto con pyodbc / alias del SP).
+    """
+    while True:
+        if cursor.description:
+            cols = [str(c[0]).strip() for c in cursor.description]
+            rows = cursor.fetchall()
+            if rows:
+                out = []
+                for row in rows:
+                    rd = {}
+                    for i, cname in enumerate(cols):
+                        key = (cname or f"col{i}").lower()
+                        rd[key] = row[i]
+                    out.append(rd)
+                return out
+        if not cursor.nextset():
+            break
+    return []
+
+
+def _sanitize_dynamic_procedure_name(name):
+    """
+    Valida ProcedureName leído de PR_ProcessType antes de usarlo en {{CALL ...}}.
+    Permite esquema.procedimiento (segmentos alfanuméricos / guión bajo).
+    """
+    s = str(name or "").strip()
+    if not s or len(s) > 200 or ".." in s:
+        return None
+    for part in s.split("."):
+        if not part or not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", part):
+            return None
+    return s
+
+
+def _drain_pyodbc_cursor(cursor):
+    """Consume resultsets pendientes tras EXEC/CALL (evita errores en la siguiente ejecución)."""
+    try:
+        while True:
+            if cursor.description:
+                cursor.fetchall()
+            if not cursor.nextset():
+                break
+    except Exception:
+        logging.debug("drenado de cursor", exc_info=True)
+
+
 @login_manager.user_loader
 def load_user(user_id):
     return User.get_user_by_id(user_id)
@@ -181,6 +232,12 @@ def reporte_liquidaciones():
 @login_required
 def reporte_planilla_vertical_page():
     return render_template('reporte_planilla_vertical.html')
+
+
+@app.route('/procesar_planilla')
+@login_required
+def procesar_planilla_page():
+    return render_template('procesar_planilla.html')
 
 
 # ==========================================
@@ -670,6 +727,358 @@ def reporte_planilla_vertical_post():
                 conn.close()
             except Exception:
                 pass
+
+
+# ==========================================
+# API Procesar planilla (cálculo) — SPs dedicados
+# ==========================================
+
+
+@app.route('/api/procesar-planilla/procesos-calculo', methods=['POST'])
+@login_required
+def api_procesar_planilla_procesos():
+    """sp_pr_selectorprocesoscalculo_web @cia, @payrolltype → PROCESSTYPE, DESCRIPTION."""
+    body = request.get_json(silent=True) or {}
+    cia = str(body.get('cia') or '').strip()
+    payrolltype = str(body.get('payrolltype') or '').strip()
+    if not cia or not payrolltype:
+        return jsonify([])
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "EXEC sp_pr_selectorprocesoscalculo_web @cia=?, @payrolltype=?",
+            (cia, payrolltype),
+        )
+        rows = _dicts_first_nonempty_resultset(cursor)
+        data = [
+            {
+                "id": str(r.get("processtype") or "").strip(),
+                "text": str(r.get("description") or "").strip(),
+            }
+            for r in rows
+            if str(r.get("processtype") or "").strip()
+        ]
+        return jsonify(data)
+    except Exception:
+        logging.exception("api_procesar_planilla_procesos")
+        return jsonify([])
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+@app.route('/api/procesar-planilla/periodos-calculo')
+@login_required
+def api_procesar_planilla_periodos_list():
+    """sp_pr_selectorperiodocalculo_web @cia, @processtype → PRPERIOD, description (lista ordenada en SP)."""
+    cia = request.args.get('cia', '').strip()
+    processtype = request.args.get('processtype', '').strip()
+    if not cia or not processtype:
+        return jsonify([])
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "EXEC sp_pr_selectorperiodocalculo_web @cia=?, @processtype=?",
+            (cia, processtype),
+        )
+        rows = _dicts_first_nonempty_resultset(cursor)
+        data = []
+        for r in rows:
+            raw = r.get("prperiod")
+            pid = _normalize_pr_period(raw) or str(raw or "").strip()
+            if not pid:
+                continue
+            data.append(
+                {
+                    "id": pid,
+                    "text": str(r.get("description") or "").strip(),
+                }
+            )
+        return jsonify(data)
+    except Exception:
+        logging.exception("api_procesar_planilla_periodos_list")
+        return jsonify([])
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+@app.route('/api/procesar-planilla/trabajadores-calculo', methods=['POST'])
+@login_required
+def api_procesar_planilla_trabajadores():
+    """sp_pr_calcularplanillas_web @cia, @payrolltype, @period → name, person, …"""
+    body = request.get_json(silent=True) or {}
+    cia = str(body.get('cia') or '').strip()
+    payrolltype = str(body.get('payrolltype') or '').strip()
+    period = _normalize_pr_period(body.get('period'))
+    if not cia or not payrolltype or not period:
+        return jsonify({"error": "Faltan compañía, tipo de planilla o periodo."}), 400
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "EXEC sp_pr_calcularplanillas_web @cia=?, @payrolltype=?, @period=?",
+            (cia, payrolltype, period),
+        )
+        rows = _dicts_first_nonempty_resultset(cursor)
+        trabajadores = [
+            {
+                "person": str(r.get("person") or "").strip(),
+                "name": str(r.get("name") or "").strip(),
+            }
+            for r in rows
+            if str(r.get("person") or "").strip()
+        ]
+        return jsonify(trabajadores)
+    except Exception as e:
+        logging.exception("api_procesar_planilla_trabajadores")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+@app.route('/ejecutar_calculo_planilla', methods=['POST'])
+@login_required
+def ejecutar_calculo_planilla():
+    """
+    Resuelve el SP en PR_ProcessType (ProcedureName) y lo ejecuta por cada person.
+    Orden de parámetros del CALL: cia, payroll_type, processtype, period, person, user_id, tc.
+    """
+    ensure_user_session()
+    body = request.get_json(silent=True) or {}
+    cia = str(body.get('cia') or session.get('company') or '').strip()
+    processtype = str(body.get('processtype') or '').strip()
+    payroll_type = str(body.get('payroll_type') or '').strip()
+    period = _normalize_pr_period(body.get('period'))
+    seleccionados = body.get('trabajadores')
+
+    if not isinstance(seleccionados, list) or len(seleccionados) == 0:
+        return jsonify({'error': 'Debe enviar una lista no vacía de trabajadores (person).'}), 400
+    if not cia or not processtype or not payroll_type or not period:
+        return jsonify({'error': 'Faltan compañía, tipo de planilla, proceso o periodo.'}), 400
+
+    try:
+        user_id = current_user.id
+    except AttributeError:
+        return jsonify({'error': 'Usuario no identificado.'}), 401
+
+    tc = 3.0
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT ProcedureName
+            FROM PR_ProcessType
+            WHERE ProcessType = ? AND Company = ?
+            """,
+            (processtype, cia),
+        )
+        row = cursor.fetchone()
+        proc_raw = None
+        if row:
+            proc_raw = getattr(row, 'ProcedureName', None)
+            if proc_raw is None and len(row) > 0:
+                proc_raw = row[0]
+        sp_name = _sanitize_dynamic_procedure_name(proc_raw)
+        if not sp_name:
+            return jsonify(
+                {
+                    'error': 'No se encontró un procedimiento configurado para este proceso '
+                    'o el nombre del procedimiento no es válido.'
+                }
+            ), 400
+
+        _drain_pyodbc_cursor(cursor)
+
+        exitos = 0
+        errores = []
+        call_sql = f'{{CALL {sp_name} (?, ?, ?, ?, ?, ?, ?)}}'
+
+        for person_id in seleccionados:
+            pid = str(person_id).strip()
+            if not pid:
+                continue
+            try:
+                cursor.execute(
+                    call_sql,
+                    (cia, payroll_type, processtype, period, pid, user_id, tc),
+                )
+                _drain_pyodbc_cursor(cursor)
+                conn.commit()
+                exitos += 1
+            except Exception as e_individual:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                errores.append(f'Error en {pid}: {e_individual}')
+                logging.warning('ejecutar_calculo_planilla persona %s: %s', pid, e_individual)
+
+        status = 'success' if not errores else 'partial'
+        message = f'Proceso terminado. Éxitos: {exitos}, Errores: {len(errores)}.'
+        return jsonify({'status': status, 'message': message, 'detalles': errores})
+    except Exception as e:
+        logging.exception('ejecutar_calculo_planilla')
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+@app.route('/ejecutar_calculo_streaming', methods=['POST'])
+@login_required
+def ejecutar_calculo_streaming():
+    """
+    Mismo orquestado que /ejecutar_calculo_planilla pero emite eventos SSE (text/event-stream)
+    tras cada trabajador: data: {"progreso","actual","total"} y al final data: {"done",...}.
+    """
+    ensure_user_session()
+    body = request.get_json(silent=True) or {}
+    cia = str(body.get('cia') or session.get('company') or '').strip()
+    processtype = str(body.get('processtype') or '').strip()
+    payroll_type = str(body.get('payroll_type') or '').strip()
+    period = _normalize_pr_period(body.get('period'))
+    seleccionados = body.get('trabajadores')
+
+    if not isinstance(seleccionados, list) or len(seleccionados) == 0:
+        return jsonify({'error': 'Debe enviar una lista no vacía de trabajadores (person).'}), 400
+    if not cia or not processtype or not payroll_type or not period:
+        return jsonify({'error': 'Faltan compañía, tipo de planilla, proceso o periodo.'}), 400
+
+    try:
+        user_id = current_user.id
+    except AttributeError:
+        return jsonify({'error': 'Usuario no identificado.'}), 401
+
+    lista = [str(x).strip() for x in seleccionados if str(x).strip()]
+    total = len(lista)
+    if total == 0:
+        return jsonify({'error': 'No hay IDs de trabajador válidos en la lista.'}), 400
+
+    tc = 3.0
+
+    def generar_progreso():
+        conn = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT ProcedureName
+                FROM PR_ProcessType
+                WHERE ProcessType = ? AND Company = ?
+                """,
+                (processtype, cia),
+            )
+            row = cursor.fetchone()
+            proc_raw = None
+            if row:
+                proc_raw = getattr(row, 'ProcedureName', None)
+                if proc_raw is None and len(row) > 0:
+                    proc_raw = row[0]
+            sp_name = _sanitize_dynamic_procedure_name(proc_raw)
+            if not sp_name:
+                yield (
+                    'data: '
+                    + json.dumps(
+                        {
+                            'error': 'No se encontró un procedimiento configurado para este proceso '
+                            'o el nombre del procedimiento no es válido.'
+                        }
+                    )
+                    + '\n\n'
+                )
+                return
+
+            _drain_pyodbc_cursor(cursor)
+
+            exitos = 0
+            errores = []
+            call_sql = f'{{CALL {sp_name} (?, ?, ?, ?, ?, ?, ?)}}'
+
+            for index, pid in enumerate(lista):
+                try:
+                    cursor.execute(
+                        call_sql,
+                        (cia, payroll_type, processtype, period, pid, user_id, tc),
+                    )
+                    _drain_pyodbc_cursor(cursor)
+                    conn.commit()
+                    exitos += 1
+                    evento = {
+                        'progreso': int(((index + 1) / total) * 100),
+                        'actual': index + 1,
+                        'total': total,
+                    }
+                except Exception as e_individual:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    msg = str(e_individual)
+                    errores.append(f'Error en {pid}: {msg}')
+                    logging.warning('ejecutar_calculo_streaming persona %s: %s', pid, e_individual)
+                    evento = {
+                        'progreso': int(((index + 1) / total) * 100),
+                        'actual': index + 1,
+                        'total': total,
+                        'detalle': msg,
+                        'person': pid,
+                    }
+
+                yield f'data: {json.dumps(evento)}\n\n'
+
+            yield (
+                'data: '
+                + json.dumps(
+                    {
+                        'done': True,
+                        'exitos': exitos,
+                        'errores': len(errores),
+                        'detalles': errores,
+                    }
+                )
+                + '\n\n'
+            )
+        except Exception as e:
+            logging.exception('ejecutar_calculo_streaming')
+            yield f'data: {json.dumps({"error": str(e)})}\n\n'
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    return Response(
+        generar_progreso(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',
+        },
+    )
 
 
 # --- Rutas legacy (intranet): recuperar desde control de versiones al implementar Planillas ---

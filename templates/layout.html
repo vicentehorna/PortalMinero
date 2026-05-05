@@ -120,6 +120,16 @@
                 </li>
 
                 <li class="py-0">
+                    <p class="sidebar-section-title px-3 mt-4 mb-0 text-uppercase fw-bold opacity-50">Procesos</p>
+                </li>
+
+                <li class="{{ 'active' if request.endpoint == 'procesar_planilla_page' else '' }}">
+                    <a href="{{ url_for('procesar_planilla_page') }}">
+                        <i class="bi bi-gear-wide-connected"></i> Procesar planilla
+                    </a>
+                </li>
+
+                <li class="py-0">
                     <p class="sidebar-section-title px-3 mt-4 mb-0 text-uppercase fw-bold opacity-50">Reportes</p>
                 </li>
 
