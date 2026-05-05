@@ -995,8 +995,18 @@ def ejecutar_calculo_planilla():
                     logging.warning('ejecutar_calculo_planilla persona %s: %s', pid, e_individual)
 
         status = 'success' if not errores else 'partial'
-        message = f'Proceso terminado. Éxitos: {exitos}, Errores: {len(errores)}.'
-        return jsonify({'status': status, 'message': message, 'detalles': errores})
+        n_errores = len(errores)
+        message = f'Proceso terminado. Éxitos: {exitos}, Errores: {n_errores}.'
+        return jsonify(
+            {
+                'status': status,
+                'message': message,
+                'exitos': exitos,
+                'errores': n_errores,
+                'procesados': exitos + n_errores,
+                'detalles': errores,
+            }
+        )
     except Exception as e:
         logging.exception('ejecutar_calculo_planilla')
         return jsonify({'error': str(e)}), 500
