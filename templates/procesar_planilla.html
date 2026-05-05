@@ -383,6 +383,16 @@ document.addEventListener('DOMContentLoaded', async function () {
         }
     }
 
+    function esperarRepintadoUI() {
+        return new Promise((resolve) => {
+            if (typeof window.requestAnimationFrame === 'function') {
+                window.requestAnimationFrame(() => resolve());
+            } else {
+                setTimeout(resolve, 0);
+            }
+        });
+    }
+
     async function iniciarCalculo() {
         const checks = document.querySelectorAll('.check-trabajador:checked');
         const listaPerson = Array.from(checks)
@@ -478,6 +488,13 @@ document.addEventListener('DOMContentLoaded', async function () {
             }
 
             if (!huboErrorFatal) {
+                // Forzar estado final visible antes del alert.
+                barra.style.width = '100%';
+                barra.setAttribute('aria-valuenow', '100');
+                porcentajeTxt.textContent = '100%';
+                label.textContent = `Procesando: ${listaPerson.length} de ${listaPerson.length}`;
+                await esperarRepintadoUI();
+
                 let msg = `Cálculo finalizado. Éxitos: ${totalExitos}, errores: ${totalErrores}.`;
                 if (detallesTotales.length) {
                     msg += '\n\n' + detallesTotales.slice(0, 10).join('\n');
