@@ -67,6 +67,32 @@ def get_db_connection():
     return DatabaseConfig.get_connection()
 
 
+def get_config_empresa(company_id):
+    """
+    Obtiene nombres de archivo de logo/firma para la compañía.
+    Retorna tupla (LogoNombre, FirmaNombre) o None.
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT LogoNombre, FirmaNombre FROM PR_mapping2 WHERE company = ?",
+            (company_id,),
+        )
+        row = cursor.fetchone()
+        return row
+    except Exception as e:
+        print(f"Error en get_config_empresa: {e}")
+        return None
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 class User(UserMixin):
     """Clase de usuario para Flask-Login"""
     

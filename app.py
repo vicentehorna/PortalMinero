@@ -3,14 +3,40 @@ import os
 import re
 import sys
 import logging
+import io
+import zipfile
+import base64
 from datetime import date, datetime
 from decimal import Decimal
 
-from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, Response
+from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, Response, send_file
 from flask_login import LoginManager, login_user, login_required, logout_user, current_user
 from dotenv import load_dotenv
 
-from database import User, get_datos_usuario_web, cambiar_password, get_db_connection
+# --- CONFIGURACIÓN FORZADA DE GTK3 ---
+# Verifica que esta sea la ruta real tras la instalación
+gtk_path = r'C:\Program Files\GTK3-Runtime Win64\bin'
+
+if os.path.exists(gtk_path):
+    # Agregamos al PATH de Windows
+    os.environ['PATH'] = gtk_path + os.pathsep + os.environ.get('PATH', '')
+    # Necesario para Python 3.8+ en Windows
+    if hasattr(os, 'add_dll_directory'):
+        try:
+            os.add_dll_directory(gtk_path)
+        except Exception:
+            pass
+# -------------------------------------
+
+try:
+    from weasyprint import HTML
+    WEASYPRINT_AVAILABLE = True
+except Exception as _weasy_err:
+    HTML = None
+    WEASYPRINT_AVAILABLE = False
+    _WEASYPRINT_IMPORT_ERROR = _weasy_err
+
+from database import User, get_datos_usuario_web, cambiar_password, get_db_connection, get_config_empresa, get_listado_generar_boletas
 
 load_dotenv()
 app = Flask(__name__)
@@ -48,6 +74,25 @@ def format_pct(value):
         return '{:.2f} %'.format(float(value or 0))
     except Exception:
         return '0.00 %'
+
+
+@app.template_filter('fecha')
+def fecha_filter(value):
+    if not value:
+        return ''
+    if isinstance(value, datetime):
+        return value.strftime('%d/%m/%Y')
+    if isinstance(value, date):
+        return value.strftime('%d/%m/%Y')
+    s = str(value).strip()
+    if not s:
+        return ''
+    try:
+        if len(s) >= 10 and s[4] == '-' and s[7] == '-':
+            return datetime.strptime(s[:10], '%Y-%m-%d').strftime('%d/%m/%Y')
+    except Exception:
+        pass
+    return s
 
 
 @app.context_processor
@@ -195,6 +240,204 @@ def _set_cursor_timeout(cursor):
         logging.debug("No se pudo fijar timeout en cursor", exc_info=True)
 
 
+def _rows_to_dual_dicts(columns, rows):
+    out = []
+    for row in rows:
+        item = {}
+        for i, col in enumerate(columns):
+            key = str(col or f'col{i}').strip()
+            val = row[i]
+            item[key] = val
+            item[key.lower()] = val
+        out.append(item)
+    return out
+
+
+def _escape_pdf_text(value):
+    return str(value or '').replace('\\', '\\\\').replace('(', '\\(').replace(')', '\\)')
+
+
+def _generar_pdf_fallback_basico(meta):
+    """
+    PDF mínimo sin dependencias externas.
+    Se usa cuando WeasyPrint no está disponible en el sistema.
+    """
+    titulo = _escape_pdf_text("BOLETA DE PAGO - MODO COMPATIBLE")
+    person = _escape_pdf_text(meta.get("person"))
+    nombre = _escape_pdf_text(meta.get("nombre_trabajador") or meta.get("nombre"))
+    cia = _escape_pdf_text(meta.get("cia"))
+    payroll = _escape_pdf_text(meta.get("payroll_type"))
+    proc = _escape_pdf_text(meta.get("process"))
+    period = _escape_pdf_text(meta.get("period"))
+    fecha = _escape_pdf_text(datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
+
+    lines = [
+        f"BT /F1 16 Tf 50 790 Td ({titulo}) Tj ET",
+        f"BT /F1 11 Tf 50 760 Td (Persona: {person}) Tj ET",
+        f"BT /F1 11 Tf 50 742 Td (Nombre: {nombre}) Tj ET",
+        f"BT /F1 11 Tf 50 724 Td (Compania: {cia}) Tj ET",
+        f"BT /F1 11 Tf 50 706 Td (Tipo planilla: {payroll}) Tj ET",
+        f"BT /F1 11 Tf 50 688 Td (Proceso: {proc}) Tj ET",
+        f"BT /F1 11 Tf 50 670 Td (Periodo: {period}) Tj ET",
+        f"BT /F1 9 Tf 50 640 Td (Generado: {fecha}) Tj ET",
+    ]
+    content_stream = ("\n".join(lines)).encode("latin-1", errors="replace")
+
+    objects = []
+    objects.append(b"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n")
+    objects.append(b"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n")
+    objects.append(
+        b"3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] "
+        b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj\n"
+    )
+    objects.append(b"4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n")
+    objects.append(
+        f"5 0 obj << /Length {len(content_stream)} >> stream\n".encode("latin-1")
+        + content_stream
+        + b"\nendstream endobj\n"
+    )
+
+    pdf = io.BytesIO()
+    pdf.write(b"%PDF-1.4\n")
+    xref_positions = [0]
+    for obj in objects:
+        xref_positions.append(pdf.tell())
+        pdf.write(obj)
+    xref_start = pdf.tell()
+    pdf.write(f"xref\n0 {len(xref_positions)}\n".encode("latin-1"))
+    pdf.write(b"0000000000 65535 f \n")
+    for pos in xref_positions[1:]:
+        pdf.write(f"{pos:010d} 00000 n \n".encode("latin-1"))
+    pdf.write(
+        (
+            "trailer << /Size "
+            + str(len(xref_positions))
+            + " /Root 1 0 R >>\nstartxref\n"
+            + str(xref_start)
+            + "\n%%EOF"
+        ).encode("latin-1")
+    )
+    pdf.seek(0)
+    return pdf
+
+
+def _exec_sp_rows_dicts(cursor, sql, params):
+    cursor.execute(sql, params)
+    cols, rows = _fetch_first_nonempty_resultset(cursor)
+    if not rows:
+        return []
+    return _rows_to_dual_dicts(cols, rows)
+
+
+def get_image_base64(file_path):
+    if not file_path or not os.path.exists(file_path):
+        return ''
+    try:
+        with open(file_path, 'rb') as f:
+            return base64.b64encode(f.read()).decode('utf-8')
+    except Exception:
+        logging.exception('get_image_base64')
+        return ''
+
+
+def _bool_env(name, default=False):
+    raw = str(os.getenv(name, str(default))).strip().lower()
+    return raw in ('1', 'true', 'yes', 'on')
+
+
+def generar_pdf_en_memoria(params):
+    ensure_user_session()
+    cia = str(params.get('cia') or session.get('company') or '').strip()
+    payroll_type = str(params.get('payroll_type') or '').strip()
+    processtype = str(params.get('process') or params.get('processtype') or '').strip()
+    period = _normalize_pr_period(params.get('period'))
+    person = str(params.get('person') or '').strip()
+    if not (cia and payroll_type and processtype and period and person):
+        raise ValueError('Faltan parámetros para generar boleta.')
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        _set_cursor_timeout(cursor)
+
+        cab_rows = _exec_sp_rows_dicts(
+            cursor,
+            'EXEC sp_pr_generarboleta_web @cia=?, @process=?, @payrolltype=?, @period=?, @person=?',
+            (cia, processtype, payroll_type, period, person),
+        )
+        cabecera = cab_rows[0] if cab_rows else {}
+
+        ingresos = _exec_sp_rows_dicts(
+            cursor,
+            'EXEC sp_pr_detalleboletaingresos_web @cia=?, @process=?, @payrolltype=?, @period=?, @person=?',
+            (cia, processtype, payroll_type, period, person),
+        )
+        descuentos = _exec_sp_rows_dicts(
+            cursor,
+            'EXEC sp_pr_detalleboletadescuentos_web @cia=?, @process=?, @payrolltype=?, @period=?, @person=?',
+            (cia, processtype, payroll_type, period, person),
+        )
+        aportes = _exec_sp_rows_dicts(
+            cursor,
+            'EXEC sp_pr_detalleboletaaportes_web @cia=?, @process=?, @payrolltype=?, @period=?, @person=?',
+            (cia, processtype, payroll_type, period, person),
+        )
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    # Nombres de archivos configurados por compañía (tabla PR_mapping2).
+    cfg = get_config_empresa(cia)
+    nombre_logo = str(cfg[0]).strip() if cfg and len(cfg) > 0 and cfg[0] else 'default_logo.png'
+    nombre_firma = str(cfg[1]).strip() if cfg and len(cfg) > 1 and cfg[1] else 'default_firma.png'
+    ruta_logo = os.path.join(app.root_path, 'static', 'assets', nombre_logo)
+    ruta_firma = os.path.join(app.root_path, 'static', 'assets', nombre_firma)
+    logo_b64 = get_image_base64(ruta_logo)
+    firma_b64 = get_image_base64(ruta_firma)
+    if _bool_env('LOG_BOLETA_ASSETS', False):
+        logging.info(
+            '[boleta assets] cia=%s logo="%s" exists=%s fallback=%s | firma="%s" exists=%s fallback=%s',
+            cia,
+            nombre_logo,
+            os.path.exists(ruta_logo),
+            nombre_logo == 'default_logo.png',
+            nombre_firma,
+            os.path.exists(ruta_firma),
+            nombre_firma == 'default_firma.png',
+        )
+
+    if WEASYPRINT_AVAILABLE:
+        html_renderizado = render_template(
+            'boleta_moderna.html',
+            cabecera=cabecera,
+            ingresos=ingresos,
+            descuentos=descuentos,
+            aportes=aportes,
+            logo_b64=logo_b64,
+            firma_b64=firma_b64,
+        )
+        pdf_io = io.BytesIO()
+        HTML(string=html_renderizado).write_pdf(pdf_io)
+        pdf_io.seek(0)
+        return pdf_io
+
+    logging.warning(
+        'WeasyPrint no disponible; usando PDF fallback básico. Motivo: %s',
+        _WEASYPRINT_IMPORT_ERROR,
+    )
+    fallback_meta = dict(cabecera or {})
+    fallback_meta['person'] = person
+    fallback_meta['cia'] = cia
+    fallback_meta['payroll_type'] = payroll_type
+    fallback_meta['process'] = processtype
+    fallback_meta['period'] = period
+    return _generar_pdf_fallback_basico(fallback_meta)
+
+
 @login_manager.user_loader
 def load_user(user_id):
     return User.get_user_by_id(user_id)
@@ -267,6 +510,214 @@ def reporte_planilla_vertical_page():
 @login_required
 def procesar_planilla_page():
     return render_template('procesar_planilla.html')
+
+
+@app.route('/generar_boletas')
+@login_required
+def generar_boletas_page():
+    return render_template('generar_boletas.html')
+
+
+@app.route('/get_lista_boletas', methods=['POST'])
+@login_required
+def get_lista_boletas():
+    """
+    sp_pr_listadogenerarboletas_web @cia, @payrolltype, @processtype, @period, @person.
+
+    Nota BD: el filtro para listar todos con @person = '0' debe ser
+    ``(@person = '0' OR PR_EmployeePayRoll.Person = @person)``.
+    Si el SP usa ``(@person = '0' AND Person = @person)``, no devolverá filas al listar todos.
+    """
+    ensure_user_session()
+    body = request.get_json(silent=True) or {}
+    cia = str(body.get('cia') or session.get('company') or '').strip()
+    payroll_type = str(body.get('payroll_type') or '').strip()
+    processtype = str(body.get('process') or body.get('processtype') or '').strip()
+    period = _normalize_pr_period(body.get('period'))
+    person = str(body.get('person') or '0').strip() or '0'
+
+    if not cia or not payroll_type or not processtype or not period:
+        return jsonify({'error': 'Faltan compañía, tipo de planilla, proceso o periodo.'}), 400
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            'EXEC sp_pr_listadogenerarboletas_web @cia=?, @payrolltype=?, @processtype=?, @period=?, @person=?',
+            (cia, payroll_type, processtype, period, person),
+        )
+        rows = _dicts_first_nonempty_resultset(cursor)
+        trabajadores = []
+        for r in rows:
+            fi = _jsonable_value(r.get('fechaingreso'))
+            fc = _jsonable_value(r.get('fechacese'))
+            trabajadores.append(
+                {
+                    'person': str(r.get('person') or '').strip(),
+                    'nombre': str(r.get('nombre') or '').strip(),
+                    'email': str(r.get('email') or '').strip(),
+                    'ingreso': fi if fi is not None else '',
+                    'cese': fc if fc is not None else '',
+                }
+            )
+        return jsonify(trabajadores)
+    except Exception as e:
+        logging.exception('get_lista_boletas')
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+@app.route('/preview_boleta')
+@login_required
+def preview_boleta():
+    params = request.args
+    person = str(params.get('person') or '').strip()
+    try:
+        pdf_buffer = generar_pdf_en_memoria(params)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        logging.exception('preview_boleta')
+        return jsonify({'error': str(e)}), 500
+    return send_file(
+        pdf_buffer,
+        mimetype='application/pdf',
+        as_attachment=False,
+        download_name=f'boleta_{person or "preview"}.pdf',
+    )
+
+
+@app.route('/procesar_boletas_masivo', methods=['POST'])
+@login_required
+def procesar_boletas_masivo():
+    ensure_user_session()
+    body = request.get_json(silent=True) or {}
+    cia = str(body.get('cia') or session.get('company') or '').strip()
+    payroll_type = str(body.get('payroll_type') or '').strip()
+    process = str(body.get('process') or '').strip()
+    period = _normalize_pr_period(body.get('period'))
+    modo = str(body.get('modo') or '').strip().lower()
+    seleccionados = body.get('trabajadores') or []
+    if modo not in ('zip', 'mail'):
+        return jsonify({'error': 'Modo inválido. Use zip o mail.'}), 400
+    if not isinstance(seleccionados, list) or not seleccionados:
+        return jsonify({'error': 'No hay trabajadores seleccionados.'}), 400
+    if not cia or not payroll_type or not process or not period:
+        return jsonify({'error': 'Faltan filtros para procesar boletas.'}), 400
+
+    ids = [str(x).strip() for x in seleccionados if str(x).strip()]
+    if not ids:
+        return jsonify({'error': 'No hay IDs válidos para procesar.'}), 400
+
+    if modo == 'zip':
+        company_name = str(body.get('company_name') or cia).strip()
+        safe_company = re.sub(r'[^A-Za-z0-9_\\-]+', '_', company_name).strip('_') or 'compania'
+        # Periodo de BD viene como yyyymmdd; pediste nombre con yyyymm.
+        period_yyyymm = period[:6] if len(period) >= 6 else period
+        safe_period = re.sub(r'[^A-Za-z0-9_\\-]+', '_', period_yyyymm).strip('_') or 'periodo'
+        nombre_zip = f'boletas_{safe_company.lower()}_{safe_period}.zip'
+        memory_file = io.BytesIO()
+        with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for pid in ids:
+                pdf_data = generar_pdf_en_memoria(
+                    {
+                        'person': pid,
+                        'cia': cia,
+                        'payroll_type': payroll_type,
+                        'process': process,
+                        'period': period,
+                    }
+                )
+                zf.writestr(f'boleta_{pid}.pdf', pdf_data.getvalue())
+        memory_file.seek(0)
+        return send_file(
+            memory_file,
+            mimetype='application/zip',
+            download_name=nombre_zip,
+            as_attachment=True,
+        )
+
+    # Stub controlado para modo correo (pendiente integración real de SMTP/servicio).
+    return jsonify(
+        {
+            'status': 'pending',
+            'message': 'Modo envío por Email pendiente de integración.',
+            'total': len(ids),
+        }
+    ), 202
+
+
+@app.route('/descargar_zip_boletas')
+@login_required
+def descargar_zip_boletas():
+    ensure_user_session()
+    cia = session.get('company')
+    payroll_type = (request.args.get('payroll_type') or '').strip()
+    processtype = (request.args.get('process') or '').strip()
+    period = _normalize_pr_period(request.args.get('period'))
+    company_name = (request.args.get('company_name') or '').strip()
+    trabajadores_raw = (request.args.get('trabajadores') or '').strip()
+    seleccionados = [x.strip() for x in trabajadores_raw.split(',') if x.strip()]
+
+    if not (cia and payroll_type and processtype and period):
+        flash('Faltan filtros para generar el ZIP de boletas.', 'warning')
+        return redirect(url_for('generar_boletas_page'))
+
+    empleados = get_listado_generar_boletas(cia, payroll_type, processtype, period, '0')
+    if not empleados:
+        flash('No hay boletas para procesar en este periodo.', 'warning')
+        return redirect(url_for('generar_boletas_page'))
+
+    # Si se envía selección, limita a esos códigos.
+    if seleccionados:
+        wanted = set(seleccionados)
+        empleados = [e for e in empleados if str(e.get('person') or e.get('employeecode') or '').strip() in wanted]
+        if not empleados:
+            flash('La selección no contiene boletas válidas para el periodo indicado.', 'warning')
+            return redirect(url_for('generar_boletas_page'))
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        for emp in empleados:
+            person_id = str(emp.get('person') or emp.get('employeecode') or '').strip()
+            if not person_id:
+                continue
+            try:
+                params = {
+                    'cia': cia,
+                    'payroll_type': payroll_type,
+                    'process': processtype,
+                    'period': period,
+                    'person': person_id,
+                }
+                pdf_io = generar_pdf_en_memoria(params)
+                fullname = str(emp.get('nombre') or emp.get('fullname') or '').strip()
+                safe_name = re.sub(r'[^A-Za-z0-9_\\-]+', '_', fullname).strip('_')
+                if not safe_name:
+                    safe_name = person_id
+                nombre_pdf = f'{person_id}_{safe_name}.pdf'
+                zip_file.writestr(nombre_pdf, pdf_io.getvalue())
+            except Exception as e:
+                logging.exception('descargar_zip_boletas persona=%s', person_id)
+                continue
+
+    zip_buffer.seek(0)
+    safe_company = re.sub(r'[^A-Za-z0-9_\\-]+', '_', company_name or cia).strip('_') or 'COMPANIA'
+    safe_period = re.sub(r'[^A-Za-z0-9_\\-]+', '_', period).strip('_') or 'PERIODO'
+    safe_payroll = re.sub(r'[^A-Za-z0-9_\\-]+', '_', payroll_type).strip('_') or 'PLANILLA'
+    nombre_zip = f'Boletas_{safe_company}_{safe_period}_{safe_payroll}.zip'
+    return send_file(
+        zip_buffer,
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name=nombre_zip,
+    )
 
 
 # ==========================================

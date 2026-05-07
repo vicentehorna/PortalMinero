@@ -1,0 +1,229 @@
+﻿<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Boleta de Pago</title>
+    <style>
+        @page { size: A4; margin: 15mm; }
+        body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 10px; color: #333; margin: 0; padding: 0; line-height: 1.3; }
+        .container { width: 100%; max-width: 800px; margin: 0 auto; }
+        table { width: 100%; border-collapse: collapse; margin-bottom: 8px; table-layout: fixed; }
+        td, th { padding: 3px 5px; vertical-align: top; }
+        
+        /* Cabecera Empresa */
+        .header-table { margin-bottom: 10px; border-bottom: 2px solid #1a4b84; padding-bottom: 8px; }
+        .empresa-nombre { font-size: 14px; font-weight: bold; color: #1a4b84; text-transform: uppercase; }
+        .empresa-info { font-size: 9px; color: #555; }
+        .boleta-titulo { font-size: 16px; font-weight: bold; text-align: center; background-color: #f4f6f9; padding: 6px; border: 1px solid #ddd; border-radius: 4px; margin-bottom: 12px; }
+
+        /* Datos del Trabajador (Organizado por columnas como tu referencia) */
+        .datos-table { border: 1px solid #ddd; margin-bottom: 12px; }
+        .datos-table td { border: 1px solid #eee; }
+        .label { font-weight: bold; background-color: #f8f9fa; width: 20%; font-size: 9px; color: #444; }
+        .value { width: 30%; font-size: 10px; }
+
+        /* Tabla de Conceptos */
+        .conceptos-table { border: 1px solid #1a4b84; margin-top: 10px; }
+        .conceptos-table th { background-color: #1a4b84; color: white; font-size: 10px; text-align: left; border: 1px solid #1a4b84; padding: 5px; }
+        .conceptos-table td { border-left: 1px solid #ddd; border-right: 1px solid #ddd; padding: 0; }
+        .col-concepto { width: 33.33%; }
+        
+        /* Subtablas internas para los montos alineados */
+        .inner-table { width: 100%; border: none; margin: 0; table-layout: auto; }
+        .inner-table td { border: none; padding: 3px 5px; font-size: 9px; }
+        .monto { text-align: right; width: 30%; }
+
+        /* Totales y Neto */
+        .totales-row { border-top: 1px solid #1a4b84; border-bottom: 1px solid #1a4b84; background-color: #f4f6f9; font-weight: bold; }
+        .totales-row td { padding: 5px; border-top: none; border-bottom: none; }
+        .neto-table {
+            margin-top: 10px;
+            margin-bottom: 0;
+            width: calc(100% - 28px);
+        }
+        .neto-label-cell {
+            border: none;
+            background: transparent;
+            text-align: right;
+            font-size: 13px;
+            font-weight: bold;
+            padding: 8px 10px 8px 0;
+        }
+        .neto-amount-cell {
+            background-color: #e9ecef;
+            font-size: 13px;
+            font-weight: bold;
+            text-align: right;
+            padding: 8px;
+            border: 2px solid #1a4b84;
+        }
+
+        /* Firmas */
+        .firmas-table { margin-top: 60px; text-align: center; }
+        .linea-firma { border-top: 1px solid #000; width: 220px; margin: 0 auto; padding-top: 5px; font-weight: bold; font-size: 10px; }
+        .firma-img { height: 75px; object-fit: contain; margin-bottom: 5px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <table class="header-table">
+            <tr>
+                <td width="70%">
+                    <div class="empresa-nombre">{{ cabecera.nombre_empresa }}</div>
+                    <div class="empresa-info">RUC: {{ cabecera.ruc_empresa }}</div>
+                    <div class="empresa-info">{{ cabecera.direccion_empresa }}</div>
+                </td>
+                <td width="30%" style="text-align: right;">
+                    {% if logo_b64 %}
+                    <img src="data:image/png;base64,{{ logo_b64 }}" style="max-height: 55px;">
+                    {% endif %}
+                </td>
+            </tr>
+        </table>
+
+        <div class="boleta-titulo">
+            {{ cabecera.titulo_boleta }}<br>
+            <span style="font-size: 10px; font-weight: normal; color: #555;">Periodo: {{ cabecera.RangoFechas }}</span>
+        </div>
+
+        <table class="datos-table">
+            <tr>
+                <td class="label">Trabajador:</td>
+                <td class="value" colspan="3"><strong>{{ cabecera.nombre_trabajador }}</strong></td>
+            </tr>
+            <tr>
+                <td class="label">Código:</td>
+                <td class="value">{{ cabecera.employeecode }}</td>
+                <td class="label">{{ cabecera.DocumentType }}</td>
+                <td class="value">{{ cabecera.dni }}</td>
+            </tr>
+            <tr>
+                <td class="label">Fecha Ingreso:</td>
+                <td class="value">{{ cabecera.fecha_ingreso|fecha }}</td>
+                <td class="label">Fecha Cese:</td>
+                <td class="value">{{ cabecera.fecha_cese|fecha if cabecera.fecha_cese else '---' }}</td>
+            </tr>
+            <tr>
+                <td class="label">Cargo:</td>
+                <td class="value">{{ cabecera.cargo_trabajador }}</td>
+                <td class="label">Centro Costo:</td>
+                <td class="value">{{ cabecera.cccode }}</td>
+            </tr>
+            <tr>
+                <td class="label">Régimen Pensión:</td>
+                <td class="value">{{ cabecera.regimenpension }} {{ cabecera.afp_description }}</td>
+                <td class="label">CUSPP:</td>
+                <td class="value">{{ cabecera.cupss }}</td>
+            </tr>
+            <tr>
+                <td class="label">Días Laborados:</td>
+                <td class="value">{{ cabecera.dias_laborables }}</td>
+                <td class="label">Días Vacaciones:</td>
+                <td class="value">{{ cabecera.dias_vacaciones }}</td>
+            </tr>
+            <tr>
+                <td class="label">Banco Salario:</td>
+                <td class="value">{{ cabecera.bancosalario }}</td>
+                <td class="label">Cuenta Salario:</td>
+                <td class="value">{{ cabecera.numerocuenta }}</td>
+            </tr>
+        </table>
+
+        <table class="conceptos-table">
+            <thead>
+                <tr>
+                    <th>INGRESOS</th>
+                    <th>DESCUENTOS</th>
+                    <th>APORTES DEL EMPLEADOR</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>
+                        <table class="inner-table">
+                            {% for item in ingresos %}
+                            <tr>
+                                <td>{{ item.printtext }}</td>
+                                <td class="monto">{{ item.conceptvalue|importe }}</td>
+                            </tr>
+                            {% endfor %}
+                        </table>
+                    </td>
+                    <td>
+                        <table class="inner-table">
+                            {% for item in descuentos %}
+                            <tr>
+                                <td>{{ item.printtext }}</td>
+                                <td class="monto">{{ item.conceptvalue|importe }}</td>
+                            </tr>
+                            {% endfor %}
+                        </table>
+                    </td>
+                    <td>
+                        <table class="inner-table">
+                            {% for item in aportes %}
+                            <tr>
+                                <td>{{ item.printtext }}</td>
+                                <td class="monto">{{ item.conceptvalue|importe }}</td>
+                            </tr>
+                            {% endfor %}
+                        </table>
+                    </td>
+                </tr>
+                <tr class="totales-row">
+                    <td>
+                        <table class="inner-table">
+                            <tr>
+                                <td>Total Ingresos:</td>
+                                <td class="monto">{{ cabecera.total_ingresos|importe }}</td>
+                            </tr>
+                        </table>
+                    </td>
+                    <td>
+                        <table class="inner-table">
+                            <tr>
+                                <td>Total Descuentos:</td>
+                                <td class="monto">{{ cabecera.total_egresos|importe }}</td>
+                            </tr>
+                        </table>
+                    </td>
+                    <td>
+                        <table class="inner-table">
+                            <tr>
+                                <td>Total Aportes:</td>
+                                <td class="monto">{{ cabecera.total_aportes|importe }}</td>
+                            </tr>
+                        </table>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+
+        <table class="neto-table">
+            <tr>
+                <td class="neto-label-cell" style="width: 70%;">NETO A PAGAR:</td>
+                <td class="neto-amount-cell" style="width: 30%;">S/ {{ cabecera.neto_pagar|importe }}</td>
+            </tr>
+        </table>
+
+        <table class="firmas-table">
+            <tr>
+                <td width="50%">
+                    {% if firma_b64 %}
+                    <img src="data:image/png;base64,{{ firma_b64 }}" class="firma-img">
+                    {% else %}
+                    <div style="height: 75px;"></div>
+                    {% endif %}
+                    <div class="linea-firma">EMPLEADOR</div>
+                    <div style="font-size: 9px; color: #555;">{{ cabecera.nombre_representante }}<br>{{ cabecera.cargo_representante }}</div>
+                </td>
+                <td width="50%">
+                    <div style="height: 75px;"></div>
+                    <div class="linea-firma">TRABAJADOR</div>
+                    <div style="font-size: 9px; color: #555;">DNI: {{ cabecera.dni }}</div>
+                </td>
+            </tr>
+        </table>
+    </div>
+</body>
+</html>

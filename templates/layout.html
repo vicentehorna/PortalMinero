@@ -151,6 +151,16 @@
                     </a>
                 </li>
 
+                <li class="py-0">
+                    <p class="sidebar-section-title px-3 mt-4 mb-0 text-uppercase fw-bold opacity-50">Documentos</p>
+                </li>
+
+                <li class="{{ 'active' if request.endpoint == 'generar_boletas_page' else '' }}">
+                    <a href="{{ url_for('generar_boletas_page') }}">
+                        <i class="bi bi-file-earmark-pdf"></i> Generar boletas
+                    </a>
+                </li>
+
                 <hr class="mx-3 opacity-25 mt-4">
 
                 <li>

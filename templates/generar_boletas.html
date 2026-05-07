@@ -1,0 +1,488 @@
+{% extends "layout.html" %}
+
+{% block title %}Generar boletas{% endblock %}
+
+{% block extra_css %}
+<style>
+    .table-scroll-boletas {
+        max-height: 65vh;
+        overflow: auto;
+        border: 1px solid #dee2e6;
+    }
+
+    .table-boletas {
+        font-size: 11px;
+        white-space: nowrap;
+        margin-bottom: 0;
+    }
+
+    .table-boletas th,
+    .table-boletas td {
+        padding: 0.2rem 0.4rem;
+        vertical-align: middle;
+    }
+
+    .table-boletas thead th {
+        position: sticky;
+        top: 0;
+        background-color: #f8f9fa;
+        z-index: 2;
+        box-shadow: 0 1px 0 #dee2e6;
+    }
+
+    .table-boletas .form-check-input {
+        width: 0.75rem;
+        height: 0.75rem;
+        margin: 0;
+        vertical-align: middle;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="card shadow-sm border-0 mb-4">
+    <div class="card-header bg-white border-bottom-0 pt-4 pb-0">
+        <h5 class="mb-0 fw-bold text-secondary"><i class="bi bi-file-earmark-pdf"></i> Generación de boletas de pago</h5>
+    </div>
+    <div class="card-body">
+        <form id="frmGenerarBoletas" class="row g-3">
+            <div class="col-md-3">
+                <label for="cboCompania" class="form-label small fw-bold text-muted">Compañía</label>
+                <select id="cboCompania" class="form-select form-select-sm" required>
+                    <option value="">Seleccione...</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label for="cboTipoPlanilla" class="form-label small fw-bold text-muted">Tipo planilla</label>
+                <select id="cboTipoPlanilla" class="form-select form-select-sm" required disabled>
+                    <option value="">Seleccione...</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label for="cboProceso" class="form-label small fw-bold text-muted">Proceso</label>
+                <select id="cboProceso" class="form-select form-select-sm" required disabled>
+                    <option value="">Seleccione...</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label for="cboPeriodo" class="form-label small fw-bold text-muted">Periodo</label>
+                <select id="cboPeriodo" class="form-select form-select-sm" required disabled>
+                    <option value="">Seleccione...</option>
+                </select>
+            </div>
+            <div class="col-12 d-flex justify-content-between align-items-center gap-2 border-top pt-3 mt-3">
+                <div class="d-flex gap-2">
+                    <button type="submit" class="btn btn-primary btn-sm px-4" id="btnConsultarBoletas"><i class="bi bi-search"></i> Consultar</button>
+                    <button type="button" class="btn btn-success btn-sm px-4" id="btnDescargarTodoZip"><i class="bi bi-file-earmark-zip"></i> Descargar Todo en ZIP</button>
+                </div>
+                <div class="d-flex justify-content-end align-items-center gap-3">
+                    <div class="form-check form-check-inline m-0">
+                        <input class="form-check-input" type="radio" name="modoProceso" id="radioDescargar" value="zip" checked>
+                        <label class="form-check-label small" for="radioDescargar">Descargar ZIP</label>
+                    </div>
+                    <div class="form-check form-check-inline m-0">
+                        <input class="form-check-input" type="radio" name="modoProceso" id="radioEnviar" value="mail">
+                        <label class="form-check-label small" for="radioEnviar">Enviar por Email</label>
+                    </div>
+                    <button type="button" class="btn btn-danger btn-sm px-4" id="btnEjecutarBoletas" disabled>
+                        <i class="bi bi-play-fill"></i> Ejecutar Acción
+                    </button>
+                </div>
+            </div>
+        </form>
+
+        <div class="table-scroll-boletas mt-4">
+            <table class="table table-bordered table-sm table-hover table-boletas align-middle">
+                <thead>
+                    <tr>
+                        <th style="width: 2.5rem;" class="text-center">
+                            <input type="checkbox" id="checkAllBoletas" class="form-check-input" title="Marcar / desmarcar todos">
+                        </th>
+                        <th style="width: 7rem;">Código</th>
+                        <th>Nombre del trabajador</th>
+                        <th style="width: 14rem;">Email</th>
+                        <th style="width: 7rem;">F. ingreso</th>
+                        <th style="width: 7rem;">F. cese</th>
+                        <th style="width: 8rem;" class="text-center">Acciones</th>
+                    </tr>
+                </thead>
+                <tbody id="tbodyBoletas"></tbody>
+            </table>
+        </div>
+
+        <div class="mt-2 text-muted small fw-bold">
+            <span id="lblBoletasCount">0 registros</span>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.addEventListener('DOMContentLoaded', async function () {
+    const URL_LISTA = {{ url_for('get_lista_boletas') | tojson }};
+    const URL_PREVIEW = {{ url_for('preview_boleta') | tojson }};
+    const URL_MASIVO = {{ url_for('procesar_boletas_masivo') | tojson }};
+    const URL_DESCARGA_ZIP = {{ url_for('descargar_zip_boletas') | tojson }};
+
+    const cboCia = document.getElementById('cboCompania');
+    const cboPt = document.getElementById('cboTipoPlanilla');
+    const cboProc = document.getElementById('cboProceso');
+    const cboPer = document.getElementById('cboPeriodo');
+
+    function limpiarValorComboSiObsoleto(select) {
+        if (!select) return;
+        const v = String(select.value || '').trim();
+        if (!v) return;
+        const ok = Array.from(select.options).some((o) => String(o.value).trim() === v);
+        if (!ok) select.value = '';
+    }
+
+    function seleccionarCompaniaInsensitive(select, codigoDeseado) {
+        if (!select) return false;
+        const want = String(codigoDeseado || '').trim().toUpperCase();
+        if (!want) return false;
+        const opt = Array.from(select.options).find((o) => String(o.value || '').trim().toUpperCase() === want);
+        if (!opt) return false;
+        select.value = opt.value;
+        return true;
+    }
+
+    function validarBotonGenerar() {
+        const n = document.querySelectorAll('.check-persona:checked').length;
+        document.getElementById('btnEjecutarBoletas').disabled = n === 0;
+    }
+
+    function syncModoProcesoUI() {
+        const modoEl = document.querySelector('input[name="modoProceso"]:checked');
+        const modo = modoEl ? modoEl.value : 'zip';
+        const btnZip = document.getElementById('btnDescargarTodoZip');
+        if (btnZip) btnZip.classList.toggle('d-none', modo !== 'zip');
+    }
+
+    function sincronizarCheckAllBoletas() {
+        const all = document.querySelectorAll('.check-persona');
+        const chk = document.getElementById('checkAllBoletas');
+        if (!chk) return;
+        if (!all.length) {
+            chk.checked = false;
+            chk.indeterminate = false;
+            return;
+        }
+        let c = 0;
+        all.forEach((x) => { if (x.checked) c++; });
+        chk.checked = c === all.length;
+        chk.indeterminate = c > 0 && c < all.length;
+    }
+
+    function toggleChecks(source) {
+        document.querySelectorAll('.check-persona').forEach((x) => { x.checked = source.checked; });
+        validarBotonGenerar();
+    }
+
+    document.getElementById('checkAllBoletas').addEventListener('change', function () {
+        toggleChecks(this);
+    });
+
+    const poblarSelect = async (url, selectElement) => {
+        if (!selectElement) return;
+        selectElement.innerHTML = '';
+        const loading = document.createElement('option');
+        loading.value = '';
+        loading.textContent = 'Cargando...';
+        selectElement.appendChild(loading);
+        try {
+            const res = await fetch(url);
+            const data = await res.json();
+            selectElement.innerHTML = '';
+            const def = document.createElement('option');
+            def.value = '';
+            def.textContent = 'Seleccione...';
+            selectElement.appendChild(def);
+            (Array.isArray(data) ? data : []).forEach((item) => {
+                const opt = document.createElement('option');
+                opt.value = item.id != null ? String(item.id) : '';
+                opt.textContent = item.text != null ? String(item.text) : '';
+                selectElement.appendChild(opt);
+            });
+            selectElement.disabled = false;
+        } catch (err) {
+            console.error(err);
+            selectElement.innerHTML = '<option value="">Error</option>';
+        }
+    };
+
+    async function cargarListaBoletas() {
+        const btn = document.getElementById('btnConsultarBoletas');
+        const tbody = document.getElementById('tbodyBoletas');
+        const cia = cboCia.value.trim();
+        const payroll_type = cboPt.value.trim();
+        const process = cboProc.value.trim();
+        const period = cboPer.value.trim();
+        if (!cia || !payroll_type || !process || !period) {
+            alert('Seleccione compañía, tipo de planilla, proceso y periodo.');
+            return;
+        }
+        btn.disabled = true;
+        tbody.innerHTML = '';
+        document.getElementById('checkAllBoletas').checked = false;
+        document.getElementById('checkAllBoletas').indeterminate = false;
+        try {
+            const res = await fetch(URL_LISTA, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    cia: cia,
+                    payroll_type: payroll_type,
+                    process: process,
+                    period: period,
+                    person: '0'
+                })
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                alert(data.error || 'Error al cargar la lista.');
+                document.getElementById('lblBoletasCount').textContent = '0 registros';
+                return;
+            }
+            if (!Array.isArray(data)) {
+                alert('Respuesta inválida del servidor.');
+                document.getElementById('lblBoletasCount').textContent = '0 registros';
+                return;
+            }
+            data.forEach((t) => {
+                const tr = document.createElement('tr');
+                const td0 = document.createElement('td');
+                td0.className = 'text-center';
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.className = 'check-persona form-check-input';
+                const pid = String(t.person || '').trim();
+                cb.value = pid;
+                cb.addEventListener('change', function () {
+                    sincronizarCheckAllBoletas();
+                    validarBotonGenerar();
+                });
+                td0.appendChild(cb);
+                const td1 = document.createElement('td');
+                td1.className = 'font-monospace';
+                td1.textContent = pid;
+                const td2 = document.createElement('td');
+                td2.textContent = String(t.nombre || '').trim();
+                const td3 = document.createElement('td');
+                td3.textContent = String(t.email || '').trim();
+                const td4 = document.createElement('td');
+                td4.textContent = String(t.ingreso || '').trim();
+                const td5 = document.createElement('td');
+                td5.textContent = String(t.cese || '').trim();
+                const btnPreview = document.createElement('button');
+                btnPreview.type = 'button';
+                btnPreview.className = 'btn btn-outline-secondary btn-sm py-0 px-2';
+                btnPreview.title = 'Ver boleta';
+                btnPreview.innerHTML = '<i class="bi bi-eye"></i>';
+                btnPreview.addEventListener('click', function () {
+                    verBoleta({
+                        person: pid,
+                        nombre: String(t.nombre || '').trim(),
+                        cia: cia,
+                        payroll_type: payroll_type,
+                        process: process,
+                        period: period
+                    });
+                });
+                const td6 = document.createElement('td');
+                td6.className = 'text-center';
+                td6.appendChild(btnPreview);
+                tr.appendChild(td0);
+                tr.appendChild(td1);
+                tr.appendChild(td2);
+                tr.appendChild(td3);
+                tr.appendChild(td4);
+                tr.appendChild(td5);
+                tr.appendChild(td6);
+                tbody.appendChild(tr);
+            });
+            document.getElementById('lblBoletasCount').textContent =
+                data.length === 1 ? '1 registro' : `${data.length} registros`;
+            sincronizarCheckAllBoletas();
+            validarBotonGenerar();
+        } catch (e) {
+            console.error(e);
+            alert('Error de red o del servidor.');
+            document.getElementById('lblBoletasCount').textContent = '0 registros';
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    function verBoleta(data) {
+        const params = new URLSearchParams({
+            person: data.person || '',
+            nombre: data.nombre || '',
+            cia: data.cia || cboCia.value.trim(),
+            payroll_type: data.payroll_type || cboPt.value.trim(),
+            process: data.process || cboProc.value.trim(),
+            period: data.period || cboPer.value.trim()
+        }).toString();
+        window.open(`${URL_PREVIEW}?${params}`, '_blank');
+    }
+
+    async function procesarMasivo() {
+        const ids = Array.from(document.querySelectorAll('.check-persona:checked')).map((c) => c.value);
+        if (!ids.length) {
+            alert('Seleccione al menos un trabajador.');
+            return;
+        }
+        const modoEl = document.querySelector('input[name="modoProceso"]:checked');
+        const modo = modoEl ? modoEl.value : 'zip';
+        const payload = {
+            cia: cboCia.value.trim(),
+            company_name: (cboCia.options[cboCia.selectedIndex]?.textContent || '').trim(),
+            payroll_type: cboPt.value.trim(),
+            process: cboProc.value.trim(),
+            period: cboPer.value.trim(),
+            modo: modo,
+            trabajadores: ids
+        };
+        const btn = document.getElementById('btnEjecutarBoletas');
+        const prev = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Procesando...';
+        try {
+            const res = await fetch(URL_MASIVO, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (modo === 'zip') {
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    alert(err.error || 'No se pudo generar el ZIP.');
+                    return;
+                }
+                const blob = await res.blob();
+                const url = window.URL.createObjectURL(blob);
+                const cd = res.headers.get('content-disposition') || '';
+                let fileName = 'boletas.zip';
+                const m = cd.match(/filename\\*=UTF-8''([^;]+)|filename=\"?([^\";]+)\"?/i);
+                if (m) {
+                    fileName = decodeURIComponent(m[1] || m[2] || fileName);
+                }
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = fileName;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+                alert('ZIP generado correctamente.');
+                return;
+            }
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                alert(data.error || 'No se pudo ejecutar el envío por email.');
+                return;
+            }
+            alert(data.message || 'Proceso ejecutado.');
+        } catch (e) {
+            console.error(e);
+            alert('Error de red o del servidor.');
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = prev;
+            validarBotonGenerar();
+        }
+    }
+
+    function descargarMasivo() {
+        const pt = cboPt.value.trim();
+        const proc = cboProc.value.trim();
+        const per = cboPer.value.trim();
+        if (!per || !pt || !proc) {
+            alert('Por favor seleccione tipo de planilla, proceso y periodo.');
+            return;
+        }
+        const seleccionados = Array.from(document.querySelectorAll('.check-persona:checked')).map((c) => c.value);
+        const qs = new URLSearchParams({
+            payroll_type: pt,
+            process: proc,
+            period: per,
+            company_name: (cboCia.options[cboCia.selectedIndex]?.textContent || '').trim()
+        });
+        if (seleccionados.length) {
+            qs.set('trabajadores', seleccionados.join(','));
+        }
+        window.location.href = `${URL_DESCARGA_ZIP}?${qs.toString()}`;
+    }
+
+    document.getElementById('frmGenerarBoletas').addEventListener('submit', async function (e) {
+        e.preventDefault();
+        await cargarListaBoletas();
+    });
+    document.querySelectorAll('input[name="modoProceso"]').forEach((r) => {
+        r.addEventListener('change', syncModoProcesoUI);
+    });
+    document.getElementById('btnDescargarTodoZip').addEventListener('click', descargarMasivo);
+    document.getElementById('btnEjecutarBoletas').addEventListener('click', procesarMasivo);
+    syncModoProcesoUI();
+
+    await poblarSelect('/api/selectores/companias', cboCia);
+    limpiarValorComboSiObsoleto(cboCia);
+    if (!String(cboCia.value || '').trim()) {
+        seleccionarCompaniaInsensitive(cboCia, 'BGT');
+    }
+    if (cboCia.value.trim()) {
+        await poblarSelect(`/api/selectores/planillas?cia=${encodeURIComponent(cboCia.value.trim())}`, cboPt);
+    }
+    limpiarValorComboSiObsoleto(cboCia);
+    limpiarValorComboSiObsoleto(cboPt);
+
+    document.getElementById('cboCompania').addEventListener('change', async function () {
+        const cia = this.value.trim();
+        document.getElementById('cboProceso').innerHTML = '<option value="">Seleccione...</option>';
+        document.getElementById('cboProceso').disabled = true;
+        document.getElementById('cboPeriodo').innerHTML = '<option value="">Seleccione...</option>';
+        document.getElementById('cboPeriodo').disabled = true;
+        if (cia) {
+            await poblarSelect(`/api/selectores/planillas?cia=${encodeURIComponent(cia)}`, cboPt);
+        } else {
+            cboPt.innerHTML = '<option value="">Seleccione...</option>';
+            cboPt.disabled = true;
+        }
+    });
+
+    document.getElementById('cboTipoPlanilla').addEventListener('change', function () {
+        const cia = cboCia.value;
+        const pt = this.value;
+        const cboProceso = document.getElementById('cboProceso');
+        document.getElementById('cboPeriodo').innerHTML = '<option value="">Seleccione...</option>';
+        document.getElementById('cboPeriodo').disabled = true;
+        if (pt) {
+            poblarSelect(
+                `/api/selectores/procesos?cia=${encodeURIComponent(cia)}&payrolltype=${encodeURIComponent(pt)}`,
+                cboProceso
+            );
+        } else {
+            cboProceso.innerHTML = '<option value="">Seleccione...</option>';
+            cboProceso.disabled = true;
+        }
+    });
+
+    document.getElementById('cboProceso').addEventListener('change', function () {
+        const cia = cboCia.value;
+        const pt = document.getElementById('cboTipoPlanilla').value;
+        const proc = this.value;
+        const cboPeriodo = document.getElementById('cboPeriodo');
+        if (proc) {
+            poblarSelect(
+                `/api/selectores/periodos?cia=${encodeURIComponent(cia)}&payrolltype=${encodeURIComponent(pt)}&processtype=${encodeURIComponent(proc)}`,
+                cboPeriodo
+            );
+        } else {
+            cboPeriodo.innerHTML = '<option value="">Seleccione...</option>';
+            cboPeriodo.disabled = true;
+        }
+    });
+});
+</script>
+{% endblock %}
