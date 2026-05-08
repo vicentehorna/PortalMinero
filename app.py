@@ -6,13 +6,10 @@ import logging
 import io
 import zipfile
 import base64
-import smtplib
 from datetime import date, datetime
 from decimal import Decimal
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.application import MIMEApplication
 
+import resend
 from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, Response, send_file, has_request_context, stream_with_context
 from flask_login import LoginManager, login_user, login_required, logout_user, current_user
 from dotenv import load_dotenv
@@ -367,9 +364,13 @@ def formatear_periodo_texto(periodo_str):
 
 
 def enviar_correo_boleta(destinatario, nombre_empleado, periodo, sexo, pdf_io):
-    """Envía una boleta PDF por correo usando SMTP configurado en variables de entorno."""
+    """Envía boleta por Resend API con PDF adjunto."""
     if not destinatario or '@' not in str(destinatario):
         return False, "Sin correo"
+
+    resend.api_key = os.getenv('RESEND_API_KEY')
+    if not resend.api_key:
+        return False, "RESEND_API_KEY no configurada"
 
     try:
         sexo_val = int(sexo)
@@ -377,44 +378,29 @@ def enviar_correo_boleta(destinatario, nombre_empleado, periodo, sexo, pdf_io):
         sexo_val = 0
     trato = "Estimada" if sexo_val == 2 else "Estimado"
     periodo_legible = formatear_periodo_texto(periodo)
-
-    msg = MIMEMultipart()
-    msg['From'] = os.getenv('MAIL_USERNAME')
-    msg['To'] = destinatario
-    msg['Subject'] = f"Boleta de Pago - {periodo_legible} - {nombre_empleado}"
-
-    cuerpo = f"""
-    {trato} {nombre_empleado},
-
-    Le hacemos entrega de su boleta de pago correspondiente al periodo de {periodo_legible}.
-
-    El documento se encuentra adjunto a este mensaje en formato PDF.
-
-    Atentamente,
-    Departamento de Recursos Humanos
-    """
-    msg.attach(MIMEText(cuerpo, 'plain'))
-
-    attachment = MIMEApplication(pdf_io.getvalue(), _subtype="pdf")
-    attachment.add_header('Content-Disposition', 'attachment', filename=f"Boleta_{periodo_legible}.pdf")
-    msg.attach(attachment)
+    pdf_base64 = base64.b64encode(pdf_io.getvalue()).decode('utf-8')
 
     try:
-        server_host = os.getenv('MAIL_SERVER', 'smtp.gmail.com')
-        server_port = int(os.getenv('MAIL_PORT', 465))
-
-        if server_port == 465:
-            server = smtplib.SMTP_SSL(server_host, server_port, timeout=20)
-        else:
-            server = smtplib.SMTP(server_host, server_port, timeout=20)
-            server.starttls()
-
-        with server:
-            server.login(os.getenv('MAIL_USERNAME'), os.getenv('MAIL_PASSWORD'))
-            server.send_message(msg)
+        params = {
+            "from": os.getenv('RESEND_FROM', 'Recursos Humanos <onboarding@resend.dev>'),
+            "to": destinatario,
+            "subject": f"Boleta de Pago - {periodo_legible} - {nombre_empleado}",
+            "html": f"""
+                <p>{trato} {nombre_empleado},</p>
+                <p>Le hacemos entrega de su boleta de pago correspondiente al periodo de <b>{periodo_legible}</b>.</p>
+                <p>Saludos,<br>Recursos Humanos</p>
+            """,
+            "attachments": [
+                {
+                    "content": pdf_base64,
+                    "filename": f"Boleta_{periodo_legible}.pdf",
+                }
+            ],
+        }
+        resend.Emails.send(params)
         return True, "Enviado"
     except Exception as e:
-        logging.exception("Error enviando correo boleta: %s", e)
+        logging.error("Error en Resend: %s", str(e))
         return False, str(e)
 
 
