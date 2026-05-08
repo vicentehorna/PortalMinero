@@ -371,6 +371,7 @@ def enviar_correo_boleta(destinatario, nombre_empleado, periodo, sexo, pdf_io):
     resend.api_key = os.getenv('RESEND_API_KEY')
     if not resend.api_key:
         return False, "RESEND_API_KEY no configurada"
+    remitente = os.getenv('MAIL_FROM', 'onboarding@resend.dev')
 
     try:
         sexo_val = int(sexo)
@@ -382,7 +383,7 @@ def enviar_correo_boleta(destinatario, nombre_empleado, periodo, sexo, pdf_io):
 
     try:
         params = {
-            "from": os.getenv('RESEND_FROM', 'Recursos Humanos <onboarding@resend.dev>'),
+            "from": f"Recursos Humanos <{remitente}>",
             "to": destinatario,
             "subject": f"Boleta de Pago - {periodo_legible} - {nombre_empleado}",
             "html": f"""
