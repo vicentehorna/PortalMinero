@@ -400,8 +400,16 @@ def enviar_correo_boleta(destinatario, nombre_empleado, periodo, sexo, pdf_io):
     msg.attach(attachment)
 
     try:
-        with smtplib.SMTP(os.getenv('MAIL_SERVER'), int(os.getenv('MAIL_PORT'))) as server:
+        server_host = os.getenv('MAIL_SERVER', 'smtp.gmail.com')
+        server_port = int(os.getenv('MAIL_PORT', 465))
+
+        if server_port == 465:
+            server = smtplib.SMTP_SSL(server_host, server_port, timeout=20)
+        else:
+            server = smtplib.SMTP(server_host, server_port, timeout=20)
             server.starttls()
+
+        with server:
             server.login(os.getenv('MAIL_USERNAME'), os.getenv('MAIL_PASSWORD'))
             server.send_message(msg)
         return True, "Enviado"
