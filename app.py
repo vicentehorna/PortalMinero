@@ -6,10 +6,14 @@ import logging
 import io
 import zipfile
 import base64
+import smtplib
 from datetime import date, datetime
 from decimal import Decimal
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.application import MIMEApplication
 
-from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, Response, send_file
+from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, Response, send_file, has_request_context, stream_with_context
 from flask_login import LoginManager, login_user, login_required, logout_user, current_user
 from dotenv import load_dotenv
 
@@ -345,9 +349,72 @@ def _bool_env(name, default=False):
     return raw in ('1', 'true', 'yes', 'on')
 
 
+def formatear_periodo_texto(periodo_str):
+    # Asumiendo formato YYYYMM... (ej: 20251212)
+    meses = {
+        "01": "Enero", "02": "Febrero", "03": "Marzo", "04": "Abril",
+        "05": "Mayo", "06": "Junio", "07": "Julio", "08": "Agosto",
+        "09": "Septiembre", "10": "Octubre", "11": "Noviembre", "12": "Diciembre",
+    }
+    try:
+        periodo_val = str(periodo_str or "").strip()
+        anio = periodo_val[:4]
+        mes_num = periodo_val[4:6]
+        nombre_mes = meses.get(mes_num, "Mes")
+        return f"{nombre_mes} {anio}"
+    except Exception:
+        return str(periodo_str or "")
+
+
+def enviar_correo_boleta(destinatario, nombre_empleado, periodo, sexo, pdf_io):
+    """Envía una boleta PDF por correo usando SMTP configurado en variables de entorno."""
+    if not destinatario or '@' not in str(destinatario):
+        return False, "Sin correo"
+
+    try:
+        sexo_val = int(sexo)
+    except Exception:
+        sexo_val = 0
+    trato = "Estimada" if sexo_val == 2 else "Estimado"
+    periodo_legible = formatear_periodo_texto(periodo)
+
+    msg = MIMEMultipart()
+    msg['From'] = os.getenv('MAIL_USERNAME')
+    msg['To'] = destinatario
+    msg['Subject'] = f"Boleta de Pago - {periodo_legible} - {nombre_empleado}"
+
+    cuerpo = f"""
+    {trato} {nombre_empleado},
+
+    Le hacemos entrega de su boleta de pago correspondiente al periodo de {periodo_legible}.
+
+    El documento se encuentra adjunto a este mensaje en formato PDF.
+
+    Atentamente,
+    Departamento de Recursos Humanos
+    """
+    msg.attach(MIMEText(cuerpo, 'plain'))
+
+    attachment = MIMEApplication(pdf_io.getvalue(), _subtype="pdf")
+    attachment.add_header('Content-Disposition', 'attachment', filename=f"Boleta_{periodo_legible}.pdf")
+    msg.attach(attachment)
+
+    try:
+        with smtplib.SMTP(os.getenv('MAIL_SERVER'), int(os.getenv('MAIL_PORT'))) as server:
+            server.starttls()
+            server.login(os.getenv('MAIL_USERNAME'), os.getenv('MAIL_PASSWORD'))
+            server.send_message(msg)
+        return True, "Enviado"
+    except Exception as e:
+        logging.exception("Error enviando correo boleta: %s", e)
+        return False, str(e)
+
+
 def generar_pdf_en_memoria(params):
-    ensure_user_session()
-    cia = str(params.get('cia') or session.get('company') or '').strip()
+    cia_param = str(params.get('cia') or '').strip()
+    if not cia_param and has_request_context():
+        ensure_user_session()
+    cia = str(cia_param or (session.get('company') if has_request_context() else '') or '').strip()
     payroll_type = str(params.get('payroll_type') or '').strip()
     processtype = str(params.get('process') or params.get('processtype') or '').strip()
     period = _normalize_pr_period(params.get('period'))
@@ -717,6 +784,94 @@ def descargar_zip_boletas():
         mimetype='application/zip',
         as_attachment=True,
         download_name=nombre_zip,
+    )
+
+
+@app.route('/enviar_boletas_masivo', methods=['POST'])
+@login_required
+def enviar_boletas_masivo():
+    data = request.get_json(silent=True) or {}
+    ensure_user_session()
+    cia = session.get('company')
+    payroll_type = str(data.get('payroll_type') or '').strip()
+    process = str(data.get('process') or '').strip()
+    period = _normalize_pr_period(data.get('period'))
+    seleccionados = data.get('empleados', data.get('trabajadores', []))
+
+    if not isinstance(seleccionados, list) or not seleccionados:
+        return jsonify({'error': 'Debe enviar una lista de empleados.'}), 400
+    if not (cia and payroll_type and process and period):
+        return jsonify({'error': 'Faltan filtros para envío de boletas.'}), 400
+
+    # Trae email/nombre del mismo SP de listado para el periodo.
+    empleados_periodo = get_listado_generar_boletas(cia, payroll_type, process, period, '0')
+    by_person = {}
+    for e in empleados_periodo:
+        pid = str(e.get('person') or e.get('employeecode') or '').strip()
+        if pid:
+            by_person[pid] = e
+
+    ids = [str(x).strip() for x in seleccionados if str(x).strip()]
+    total = len(ids)
+    if total == 0:
+        return jsonify({'error': 'No hay códigos de empleado válidos.'}), 400
+
+    def generar_progreso_envio():
+        enviados = 0
+        errores = 0
+        for idx, emp_code in enumerate(ids, start=1):
+            emp = by_person.get(emp_code, {})
+            emp_nombre = str(emp.get('nombre') or emp.get('fullname') or emp_code).strip()
+            emp_email = str(emp.get('email') or '').strip()
+
+            if not emp_email:
+                errores += 1
+                yield f"data: {json.dumps({'empleado': emp_nombre, 'codigo': emp_code, 'status': 'Error', 'detalle': 'Sin email', 'actual': idx, 'total': total, 'progreso': int((idx / total) * 100)})}\n\n"
+                continue
+
+            try:
+                pdf_buffer = generar_pdf_en_memoria(
+                    {
+                        'cia': cia,
+                        'payroll_type': payroll_type,
+                        'process': process,
+                        'period': period,
+                        'person': emp_code,
+                    }
+                )
+                exito, msg = enviar_correo_boleta(
+                    destinatario=emp_email,
+                    nombre_empleado=emp_nombre,
+                    periodo=period,
+                    sexo=emp.get('sex', emp.get('sexo', 0)),
+                    pdf_io=pdf_buffer,
+                )
+                if exito:
+                    enviados += 1
+                    status = 'Enviado'
+                    detalle = msg
+                else:
+                    errores += 1
+                    status = 'Error'
+                    detalle = msg or 'No se pudo enviar el correo.'
+            except Exception as e:
+                logging.exception('enviar_boletas_masivo persona=%s', emp_code)
+                errores += 1
+                status = 'Error'
+                detalle = str(e)
+
+            yield f"data: {json.dumps({'empleado': emp_nombre, 'codigo': emp_code, 'email': emp_email, 'status': status, 'detalle': detalle, 'actual': idx, 'total': total, 'progreso': int((idx / total) * 100)})}\n\n"
+
+        yield f"data: {json.dumps({'done': True, 'enviados': enviados, 'errores': errores, 'total': total})}\n\n"
+
+    return Response(
+        stream_with_context(generar_progreso_envio()),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',
+        },
     )
 
 

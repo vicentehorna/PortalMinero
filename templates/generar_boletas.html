@@ -118,12 +118,14 @@
 {% endblock %}
 
 {% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 <script>
 document.addEventListener('DOMContentLoaded', async function () {
     const URL_LISTA = {{ url_for('get_lista_boletas') | tojson }};
     const URL_PREVIEW = {{ url_for('preview_boleta') | tojson }};
     const URL_MASIVO = {{ url_for('procesar_boletas_masivo') | tojson }};
     const URL_DESCARGA_ZIP = {{ url_for('descargar_zip_boletas') | tojson }};
+    const URL_ENVIO_MASIVO = {{ url_for('enviar_boletas_masivo') | tojson }};
 
     const cboCia = document.getElementById('cboCompania');
     const cboPt = document.getElementById('cboTipoPlanilla');
@@ -327,37 +329,40 @@ document.addEventListener('DOMContentLoaded', async function () {
         window.open(`${URL_PREVIEW}?${params}`, '_blank');
     }
 
-    async function procesarMasivo() {
+    async function ejecutarAccion() {
         const ids = Array.from(document.querySelectorAll('.check-persona:checked')).map((c) => c.value);
         if (!ids.length) {
-            alert('Seleccione al menos un trabajador.');
+            Swal.fire('Atención', 'Por favor, seleccione al menos un trabajador.', 'warning');
             return;
         }
         const modoEl = document.querySelector('input[name="modoProceso"]:checked');
         const modo = modoEl ? modoEl.value : 'zip';
-        const payload = {
+        const filtros = {
             cia: cboCia.value.trim(),
             company_name: (cboCia.options[cboCia.selectedIndex]?.textContent || '').trim(),
             payroll_type: cboPt.value.trim(),
             process: cboProc.value.trim(),
-            period: cboPer.value.trim(),
-            modo: modo,
-            trabajadores: ids
+            period: cboPer.value.trim()
         };
         const btn = document.getElementById('btnEjecutarBoletas');
         const prev = btn.innerHTML;
         btn.disabled = true;
         btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Procesando...';
         try {
-            const res = await fetch(URL_MASIVO, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
             if (modo === 'zip') {
+                const payloadZip = {
+                    ...filtros,
+                    modo: 'zip',
+                    trabajadores: ids
+                };
+                const res = await fetch(URL_MASIVO, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payloadZip)
+                });
                 if (!res.ok) {
                     const err = await res.json().catch(() => ({}));
-                    alert(err.error || 'No se pudo generar el ZIP.');
+                    Swal.fire('Error', err.error || 'No se pudo generar el ZIP.', 'error');
                     return;
                 }
                 const blob = await res.blob();
@@ -375,18 +380,85 @@ document.addEventListener('DOMContentLoaded', async function () {
                 a.click();
                 document.body.removeChild(a);
                 window.URL.revokeObjectURL(url);
-                alert('ZIP generado correctamente.');
+                Swal.fire('Completado', 'ZIP generado correctamente.', 'success');
                 return;
             }
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) {
-                alert(data.error || 'No se pudo ejecutar el envío por email.');
+
+            Swal.fire({
+                title: 'Enviando Boletas',
+                html: '<p>Preparando correos...</p><div id="progreso-texto" style="font-weight:bold; color:#1a4b84;"></div>',
+                allowOutsideClick: false,
+                didOpen: () => {
+                    Swal.showLoading();
+                }
+            });
+
+            const resEnv = await fetch(URL_ENVIO_MASIVO, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    empleados: ids,
+                    period: filtros.period,
+                    payroll_type: filtros.payroll_type,
+                    process: filtros.process
+                })
+            });
+            if (!resEnv.ok) {
+                const err = await resEnv.json().catch(() => ({}));
+                Swal.fire('Error', err.error || 'No se pudo iniciar el envío por email.', 'error');
                 return;
             }
-            alert(data.message || 'Proceso ejecutado.');
+            if (!resEnv.body || !resEnv.body.getReader) {
+                Swal.fire('Error', 'El navegador no permite leer el progreso de envío.', 'error');
+                return;
+            }
+            const reader = resEnv.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let resumen = { enviados: 0, errores: 0, total: ids.length };
+            const procesados = new Set();
+            while (true) {
+                const { value, done } = await reader.read();
+                buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+                let sep;
+                while ((sep = buffer.search(/\r?\n\r?\n/)) >= 0) {
+                    const bloque = buffer.slice(0, sep);
+                    const m = buffer.slice(sep).match(/^\r?\n\r?\n/);
+                    buffer = buffer.slice(sep + (m ? m[0].length : 2));
+                    const lineas = bloque.split(/\r?\n/);
+                    for (const linea of lineas) {
+                        if (!linea.startsWith('data:')) continue;
+                        const payload = linea.replace(/^data:\s?/, '').trim();
+                        if (!payload) continue;
+                        let data;
+                        try { data = JSON.parse(payload); } catch (_) { continue; }
+                        if (data.done) {
+                            resumen = data;
+                        } else {
+                            const key = String(data.codigo || data.empleado || '');
+                            if (key && !procesados.has(key)) {
+                                procesados.add(key);
+                            }
+                            const progresoEl = document.getElementById('progreso-texto');
+                            if (progresoEl) {
+                                progresoEl.innerText = `Procesando: ${data.empleado || ''} (${data.status || 'En proceso'}) ${data.actual || procesados.size}/${data.total || ids.length}`;
+                            }
+                            btn.innerHTML = `Enviando... ${data.actual || procesados.size}/${data.total || ids.length}`;
+                        }
+                    }
+                }
+                if (done) break;
+            }
+
+            Swal.fire({
+                title: 'Proceso Finalizado',
+                html: `Se enviaron <b>${resumen.enviados || 0}</b> correos con éxito.<br>Errores: <b>${resumen.errores || 0}</b>`,
+                icon: (resumen.enviados || 0) > 0 ? 'success' : 'error',
+                confirmButtonColor: '#1a4b84'
+            });
         } catch (e) {
             console.error(e);
-            alert('Error de red o del servidor.');
+            Swal.fire('Error', 'Ocurrió un problema en la conexión con el servidor.', 'error');
         } finally {
             btn.disabled = false;
             btn.innerHTML = prev;
@@ -423,7 +495,7 @@ document.addEventListener('DOMContentLoaded', async function () {
         r.addEventListener('change', syncModoProcesoUI);
     });
     document.getElementById('btnDescargarTodoZip').addEventListener('click', descargarMasivo);
-    document.getElementById('btnEjecutarBoletas').addEventListener('click', procesarMasivo);
+    document.getElementById('btnEjecutarBoletas').addEventListener('click', ejecutarAccion);
     syncModoProcesoUI();
 
     await poblarSelect('/api/selectores/companias', cboCia);
