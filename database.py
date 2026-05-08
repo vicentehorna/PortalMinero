@@ -12,7 +12,7 @@ class DatabaseConfig:
     """Configuración de conexión a SQL Server"""
     
     @staticmethod
-    def get_connection_string():
+    def get_connection_string(driver_override=None):
         """Construye la cadena de conexión a SQL Server"""
         # server = '179.61.14.224,1433'
         # database = 'hm_ultra2'
@@ -28,11 +28,13 @@ class DatabaseConfig:
         print(f"DEBUG: Intentando conectar a SERVER: {server} | DB: {database}")
         
 
-        if platform.system() == 'Windows':
+        if driver_override:
+            driver = driver_override
+        elif platform.system() == 'Windows':
             driver = '{SQL Server}'
-           
         else:
-           driver = 'ODBC Driver 17 for SQL Server'
+            # En contenedores Linux modernos (Render/Debian 12) suele estar msodbcsql18.
+            driver = 'ODBC Driver 18 for SQL Server'
 
         print(f"DEBUG: Intentando conectar a [{server}] usando el driver: {driver}")
 
@@ -54,12 +56,33 @@ class DatabaseConfig:
     @staticmethod
     def get_connection():
         """Crea y retorna una conexión a SQL Server"""
-        try:
-            conn = pyodbc.connect(DatabaseConfig.get_connection_string())
-            return conn
-        except Exception as e:
-            print(f"Error al conectar con SQL Server: {e}")
-            raise
+        if platform.system() == 'Windows':
+            try:
+                return pyodbc.connect(DatabaseConfig.get_connection_string())
+            except Exception as e:
+                print(f"Error al conectar con SQL Server: {e}")
+                raise
+
+        # Linux: probar 18 primero y luego 17 para mayor compatibilidad.
+        candidate_drivers = [
+            os.getenv('SQL_ODBC_DRIVER', '').strip(),
+            'ODBC Driver 18 for SQL Server',
+            'ODBC Driver 17 for SQL Server',
+        ]
+        seen = set()
+        last_error = None
+        for drv in candidate_drivers:
+            if not drv or drv in seen:
+                continue
+            seen.add(drv)
+            try:
+                return pyodbc.connect(DatabaseConfig.get_connection_string(driver_override=drv))
+            except Exception as e:
+                last_error = e
+                print(f"DEBUG: Falló conexión con driver '{drv}': {e}")
+
+        print(f"Error al conectar con SQL Server: {last_error}")
+        raise last_error
 
 
 def get_db_connection():
