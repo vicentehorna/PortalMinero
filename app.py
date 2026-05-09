@@ -821,7 +821,8 @@ def enviar_boletas_masivo():
 
             if not emp_email:
                 errores += 1
-                yield f"data: {json.dumps({'empleado': emp_nombre, 'codigo': emp_code, 'status': 'Error', 'detalle': 'Sin email', 'actual': idx, 'total': total, 'progreso': int((idx / total) * 100)})}\n\n"
+                motivo = 'Sin email'
+                yield f"data: {json.dumps({'empleado': emp_nombre, 'codigo': emp_code, 'status': 'Error', 'detalle': motivo, 'motivo': motivo, 'actual': idx, 'total': total, 'progreso': int((idx / total) * 100)})}\n\n"
                 continue
 
             try:
@@ -845,17 +846,20 @@ def enviar_boletas_masivo():
                     enviados += 1
                     status = 'Enviado'
                     detalle = msg
+                    motivo = ''
                 else:
                     errores += 1
                     status = 'Error'
                     detalle = msg or 'No se pudo enviar el correo.'
+                    motivo = detalle
             except Exception as e:
                 logging.exception('enviar_boletas_masivo persona=%s', emp_code)
                 errores += 1
                 status = 'Error'
                 detalle = str(e)
+                motivo = detalle
 
-            yield f"data: {json.dumps({'empleado': emp_nombre, 'codigo': emp_code, 'email': emp_email, 'status': status, 'detalle': detalle, 'actual': idx, 'total': total, 'progreso': int((idx / total) * 100)})}\n\n"
+            yield f"data: {json.dumps({'empleado': emp_nombre, 'codigo': emp_code, 'email': emp_email, 'status': status, 'detalle': detalle, 'motivo': motivo, 'actual': idx, 'total': total, 'progreso': int((idx / total) * 100)})}\n\n"
 
         yield f"data: {json.dumps({'done': True, 'enviados': enviados, 'errores': errores, 'total': total})}\n\n"
 

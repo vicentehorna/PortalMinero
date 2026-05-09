@@ -386,7 +386,7 @@ document.addEventListener('DOMContentLoaded', async function () {
 
             Swal.fire({
                 title: 'Enviando Boletas',
-                html: '<p>Preparando correos...</p><div id="progreso-texto" style="font-weight:bold; color:#1a4b84;"></div>',
+                html: '<div id="progreso-lista" style="text-align:left; font-size:0.9em; max-height:220px; overflow-y:auto; border:1px solid #eee; padding:10px;"></div><div id="progreso-texto" style="font-weight:bold; color:#1a4b84; margin-top:8px;"></div>',
                 allowOutsideClick: false,
                 didOpen: () => {
                     Swal.showLoading();
@@ -417,6 +417,8 @@ document.addEventListener('DOMContentLoaded', async function () {
             let buffer = '';
             let resumen = { enviados: 0, errores: 0, total: ids.length };
             const procesados = new Set();
+            const erroresDetalle = [];
+            const listaLogs = document.getElementById('progreso-lista');
             while (true) {
                 const { value, done } = await reader.read();
                 buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
@@ -443,11 +445,54 @@ document.addEventListener('DOMContentLoaded', async function () {
                             if (progresoEl) {
                                 progresoEl.innerText = `Procesando: ${data.empleado || ''} (${data.status || 'En proceso'}) ${data.actual || procesados.size}/${data.total || ids.length}`;
                             }
+                            if (listaLogs) {
+                                const color = data.status === 'Enviado' ? 'green' : 'red';
+                                const item = document.createElement('div');
+                                item.style.color = color;
+                                item.textContent = `• ${data.empleado || ''}: ${data.status || 'En proceso'}`;
+                                listaLogs.appendChild(item);
+                                listaLogs.scrollTop = listaLogs.scrollHeight;
+                            }
+                            if (data.status === 'Error') {
+                                erroresDetalle.push({
+                                    nombre: data.empleado || data.codigo || 'N/D',
+                                    motivo: data.motivo || data.detalle || 'Error no especificado'
+                                });
+                            }
                             btn.innerHTML = `Enviando... ${data.actual || procesados.size}/${data.total || ids.length}`;
                         }
                     }
                 }
                 if (done) break;
+            }
+
+            if (erroresDetalle.length > 0) {
+                const escapeHtml = (v) => String(v || '')
+                    .replaceAll('&', '&amp;')
+                    .replaceAll('<', '&lt;')
+                    .replaceAll('>', '&gt;')
+                    .replaceAll('"', '&quot;')
+                    .replaceAll("'", '&#39;');
+                const filas = erroresDetalle.map((e) => `
+                    <tr style="border-bottom:1px solid #eee;">
+                        <td style="padding:5px; text-align:left;">${escapeHtml(e.nombre)}</td>
+                        <td style="padding:5px; color:red; text-align:left;">${escapeHtml(e.motivo)}</td>
+                    </tr>
+                `).join('');
+                Swal.fire({
+                    title: 'Resumen de Envío',
+                    html: `
+                        <p>El proceso terminó con algunos inconvenientes:</p>
+                        <table style="width:100%; font-size:0.8em; border-collapse:collapse;">
+                            <thead><tr style="border-bottom:2px solid #ddd;"><th>Empleado</th><th>Motivo</th></tr></thead>
+                            <tbody>${filas}</tbody>
+                        </table>
+                    `,
+                    icon: 'info',
+                    width: '700px',
+                    confirmButtonColor: '#1a4b84'
+                });
+                return;
             }
 
             Swal.fire({
