@@ -38,6 +38,15 @@
         margin: 0;
         vertical-align: middle;
     }
+
+    /* Fila de filtros: periodo legible aunque la columna sea estrecha */
+    #txtPeriodoDesc {
+        min-width: 0;
+    }
+
+    #cboCesados {
+        max-width: 100%;
+    }
 </style>
 {% endblock %}
 
@@ -48,19 +57,19 @@
     </div>
     <div class="card-body">
         <div class="row g-3 align-items-end mb-2">
-            <div class="col-md-3">
+            <div class="col-md-2">
                 <label for="cboCompania" class="form-label small fw-bold text-muted">Compañía</label>
                 <select id="cboCompania" class="form-select form-select-sm" required>
                     <option value="">Seleccione...</option>
                 </select>
             </div>
-            <div class="col-md-3">
+            <div class="col-md-2">
                 <label for="cboTipoPlanilla" class="form-label small fw-bold text-muted">Tipo planilla</label>
                 <select id="cboTipoPlanilla" class="form-select form-select-sm" required disabled>
                     <option value="">Seleccione...</option>
                 </select>
             </div>
-            <div class="col-md-3">
+            <div class="col-md-2">
                 <label for="cboProcesoCalculo" class="form-label small fw-bold text-muted">Proceso</label>
                 <select id="cboProcesoCalculo" class="form-select form-select-sm" required disabled>
                     <option value="">Seleccione...</option>
@@ -68,8 +77,22 @@
             </div>
             <div class="col-md-2">
                 <label for="txtPeriodoDesc" class="form-label small fw-bold text-muted">Periodo</label>
-                <input type="text" id="txtPeriodoDesc" class="form-control form-control-sm" readonly autocomplete="off" placeholder="—">
+                <input type="text" id="txtPeriodoDesc" class="form-control form-control-sm text-truncate" readonly autocomplete="off" placeholder="—" title="">
                 <input type="hidden" id="hidPeriodoCalculo" value="">
+            </div>
+            <div class="col-md-1">
+                <label for="cboCesados" class="form-label small fw-bold text-muted">Cesados</label>
+                <select id="cboCesados" class="form-select form-select-sm">
+                    <option value="T" selected>Todos</option>
+                    <option value="Y">Sí</option>
+                    <option value="N">No</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label for="cboUnidad" class="form-label small fw-bold text-muted">Unidad</label>
+                <select id="cboUnidad" class="form-select form-select-sm">
+                    <option value="0">Todas</option>
+                </select>
             </div>
             <div class="col-md-1 d-grid">
                 <button type="button" class="btn btn-primary btn-sm" id="btnListarTrabajadores" title="Listar trabajadores">
@@ -106,6 +129,8 @@
                         </th>
                         <th style="width: 7rem;">Código</th>
                         <th>Nombre del trabajador</th>
+                        <th style="width: 7rem;">F. ingreso</th>
+                        <th style="width: 7rem;">F. cese</th>
                     </tr>
                 </thead>
                 <tbody id="tbodyTrabajadores"></tbody>
@@ -132,6 +157,7 @@ document.addEventListener('DOMContentLoaded', async function () {
 
     const URL_PROCESOS = {{ url_for('api_procesar_planilla_procesos') | tojson }};
     const URL_PERIODOS = {{ url_for('api_procesar_planilla_periodos_list') | tojson }};
+    const URL_UNIDADES = {{ url_for('api_unidades') | tojson }};
     const URL_TRABAJADORES = {{ url_for('api_procesar_planilla_trabajadores') | tojson }};
     const URL_EJECUTAR_STREAMING = {{ url_for('ejecutar_calculo_streaming') | tojson }};
     const URL_EJECUTAR_CALCULO = {{ url_for('ejecutar_calculo_planilla') | tojson }};
@@ -140,6 +166,8 @@ document.addEventListener('DOMContentLoaded', async function () {
     const cboCia = document.getElementById('cboCompania');
     const cboPt = document.getElementById('cboTipoPlanilla');
     const cboProc = document.getElementById('cboProcesoCalculo');
+    const cboCesados = document.getElementById('cboCesados');
+    const cboUnidad = document.getElementById('cboUnidad');
 
     function limpiarValorComboSiObsoleto(select) {
         if (!select) return;
@@ -226,12 +254,41 @@ document.addEventListener('DOMContentLoaded', async function () {
         }
     };
 
+    async function cargarUnidades() {
+        if (!cboUnidad) return;
+        const prev = String(cboUnidad.value || '0').trim();
+        cboUnidad.innerHTML = '';
+        const optAll = document.createElement('option');
+        optAll.value = '0';
+        optAll.textContent = 'Todas';
+        cboUnidad.appendChild(optAll);
+        try {
+            const res = await fetch(URL_UNIDADES);
+            const data = await res.json();
+            (Array.isArray(data) ? data : []).forEach((item) => {
+                const id = item.id != null ? String(item.id).trim() : '';
+                if (!id || id === '0') return;
+                const opt = document.createElement('option');
+                opt.value = id;
+                opt.textContent = item.text != null ? String(item.text) : id;
+                cboUnidad.appendChild(opt);
+            });
+            const ok = Array.from(cboUnidad.options).some((o) => String(o.value).trim() === prev);
+            cboUnidad.value = ok ? prev : '0';
+        } catch (e) {
+            console.error(e);
+            cboUnidad.value = '0';
+        }
+    }
+
     async function cargarProcesos() {
         const cia = cboCia.value.trim();
         const pt = cboPt.value.trim();
         cboProc.innerHTML = '<option value="">Seleccione...</option>';
         document.getElementById('hidPeriodoCalculo').value = '';
-        document.getElementById('txtPeriodoDesc').value = '';
+        const txtPerReset = document.getElementById('txtPeriodoDesc');
+        txtPerReset.value = '';
+        txtPerReset.title = '';
         limpiarTablaTrabajadores();
         if (!cia || !pt) {
             cboProc.disabled = true;
@@ -264,6 +321,7 @@ document.addEventListener('DOMContentLoaded', async function () {
         const txt = document.getElementById('txtPeriodoDesc');
         hid.value = '';
         txt.value = '';
+        txt.title = '';
         if (!cia || !proc) return;
         try {
             const res = await fetch(
@@ -280,6 +338,7 @@ document.addEventListener('DOMContentLoaded', async function () {
             if (pick) {
                 hid.value = String(pick.id || '');
                 txt.value = String(pick.text || '');
+                txt.title = String(pick.text || pick.id || '').trim();
             }
         } catch (e) {
             console.error(e);
@@ -292,6 +351,8 @@ document.addEventListener('DOMContentLoaded', async function () {
         const cia = cboCia.value.trim();
         const payrolltype = cboPt.value.trim();
         const period = document.getElementById('hidPeriodoCalculo').value.trim();
+        const cesados = String(cboCesados.value || 'T').trim().toUpperCase();
+        const repunit = String(cboUnidad.value || '0').trim() || '0';
         if (!cia || !payrolltype || !period) {
             alert('Seleccione compañía, tipo de planilla, proceso y periodo (válido) antes de listar.');
             return;
@@ -304,7 +365,7 @@ document.addEventListener('DOMContentLoaded', async function () {
             const res = await fetch(URL_TRABAJADORES, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ cia, payrolltype, period })
+                body: JSON.stringify({ cia, payrolltype, period, cesados, repunit })
             });
             const data = await res.json();
             if (!res.ok) {
@@ -332,9 +393,15 @@ document.addEventListener('DOMContentLoaded', async function () {
                 td1.textContent = pid;
                 const td2 = document.createElement('td');
                 td2.textContent = String(t.name || '').trim();
+                const td3 = document.createElement('td');
+                td3.textContent = String(t.entrydate || '').trim();
+                const td4 = document.createElement('td');
+                td4.textContent = String(t.ceasedate || '').trim();
                 tr.appendChild(td0);
                 tr.appendChild(td1);
                 tr.appendChild(td2);
+                tr.appendChild(td3);
+                tr.appendChild(td4);
                 tbody.appendChild(tr);
             });
             document.getElementById('lblTrabajadoresCount').textContent =
@@ -353,6 +420,8 @@ document.addEventListener('DOMContentLoaded', async function () {
             'cboCompania',
             'cboTipoPlanilla',
             'cboProcesoCalculo',
+            'cboCesados',
+            'cboUnidad',
             'txtPeriodoDesc',
             'btnListarTrabajadores',
             'checkAll'
@@ -537,6 +606,7 @@ document.addEventListener('DOMContentLoaded', async function () {
 
     await poblarSelect('/api/selectores/companias', cboCia);
     limpiarValorComboSiObsoleto(cboCia);
+    await cargarUnidades();
 
     const guardado = filtrosPersist ? filtrosPersist.leer() : null;
     const optEx = window.FiltrosPlanillasReportes && window.FiltrosPlanillasReportes.optionExistsTrim;
@@ -552,6 +622,14 @@ document.addEventListener('DOMContentLoaded', async function () {
             const proceso = guardado.proceso != null ? String(guardado.proceso).trim() : '';
             if (proceso && optEx(cboProc, proceso)) {
                 cboProc.value = proceso;
+                const ces = guardado.cesados != null ? String(guardado.cesados).trim().toUpperCase() : '';
+                if (ces && ['T', 'Y', 'N'].includes(ces) && cboCesados) {
+                    cboCesados.value = ces;
+                }
+                const ru = guardado.repunit != null ? String(guardado.repunit).trim() : '';
+                if (ru !== '' && cboUnidad && optEx && optEx(cboUnidad, ru)) {
+                    cboUnidad.value = ru;
+                }
                 const perSaved = guardado.periodo != null ? String(guardado.periodo).trim() : '';
                 await cargarPeriodo(perSaved || undefined);
                 const hid = document.getElementById('hidPeriodoCalculo').value.trim();
@@ -577,7 +655,9 @@ document.addEventListener('DOMContentLoaded', async function () {
         cboProc.innerHTML = '<option value="">Seleccione...</option>';
         cboProc.disabled = true;
         document.getElementById('hidPeriodoCalculo').value = '';
-        document.getElementById('txtPeriodoDesc').value = '';
+        const txtP = document.getElementById('txtPeriodoDesc');
+        txtP.value = '';
+        txtP.title = '';
         limpiarTablaTrabajadores();
         if (cia) {
             await poblarSelect(`/api/selectores/planillas?cia=${encodeURIComponent(cia)}`, cboPt);
@@ -590,7 +670,9 @@ document.addEventListener('DOMContentLoaded', async function () {
 
     document.getElementById('cboTipoPlanilla').addEventListener('change', async function () {
         document.getElementById('hidPeriodoCalculo').value = '';
-        document.getElementById('txtPeriodoDesc').value = '';
+        const txtTP = document.getElementById('txtPeriodoDesc');
+        txtTP.value = '';
+        txtTP.title = '';
         limpiarTablaTrabajadores();
         await cargarProcesos();
         if (filtrosPersist) filtrosPersist.guardar();
@@ -598,9 +680,21 @@ document.addEventListener('DOMContentLoaded', async function () {
 
     document.getElementById('cboProcesoCalculo').addEventListener('change', async function () {
         document.getElementById('hidPeriodoCalculo').value = '';
-        document.getElementById('txtPeriodoDesc').value = '';
+        const txtPR = document.getElementById('txtPeriodoDesc');
+        txtPR.value = '';
+        txtPR.title = '';
         limpiarTablaTrabajadores();
         await cargarPeriodo();
+        if (filtrosPersist) filtrosPersist.guardar();
+    });
+
+    document.getElementById('cboCesados').addEventListener('change', function () {
+        limpiarTablaTrabajadores();
+        if (filtrosPersist) filtrosPersist.guardar();
+    });
+
+    document.getElementById('cboUnidad').addEventListener('change', function () {
+        limpiarTablaTrabajadores();
         if (filtrosPersist) filtrosPersist.guardar();
     });
 

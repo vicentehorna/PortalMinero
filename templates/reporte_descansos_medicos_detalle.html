@@ -1,0 +1,623 @@
+{% extends "layout.html" %}
+
+{% block title %}Detalle de descansos médicos{% endblock %}
+
+{% block extra_css %}
+<style>
+    .table-scroll-container {
+        max-height: 65vh;
+        overflow: auto;
+        border: 1px solid #dee2e6;
+    }
+
+    .table-planilla-vertical {
+        --sticky-col1-w: 5.75rem;
+        font-size: 11px;
+        white-space: nowrap;
+        margin-bottom: 0;
+    }
+
+    .table-planilla-vertical th,
+    .table-planilla-vertical td {
+        padding: 0.2rem 0.4rem;
+        vertical-align: middle;
+    }
+
+    .table-planilla-vertical thead th {
+        position: sticky;
+        top: 0;
+        background-color: #f8f9fa;
+        z-index: 2;
+        box-shadow: 0 1px 0 #dee2e6;
+    }
+
+    .table-planilla-vertical .sticky-col-1 {
+        position: sticky;
+        left: 0;
+        z-index: 1;
+        background-color: #fff;
+        min-width: var(--sticky-col1-w);
+        width: var(--sticky-col1-w);
+        max-width: var(--sticky-col1-w);
+        box-sizing: border-box;
+    }
+
+    .table-planilla-vertical .sticky-col-2 {
+        position: sticky;
+        left: var(--sticky-col1-w);
+        z-index: 1;
+        background-color: #fff;
+        min-width: 13rem;
+        max-width: 14rem;
+        box-sizing: border-box;
+    }
+
+    .table-planilla-vertical thead th.sticky-col-1,
+    .table-planilla-vertical thead th.sticky-col-2 {
+        z-index: 3;
+        background-color: #f8f9fa;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="card shadow-sm border-0 mb-4">
+    <div class="card-header bg-white border-bottom-0 pt-4 pb-0">
+        <h5 class="mb-0 fw-bold text-secondary"><i class="bi bi-heart-pulse"></i> Detalle de descansos médicos</h5>
+    </div>
+    <div class="card-body">
+        <form id="frmDescansosMedicosDetalle" class="row g-3">
+            <div class="col-12 col-sm-6 col-md-4 col-lg-2">
+                <label for="cboCompania" class="form-label small fw-bold text-muted">Compañía</label>
+                <select id="cboCompania" class="form-select form-select-sm" required>
+                    <option value="">Seleccione...</option>
+                </select>
+            </div>
+            <div class="col-12 col-sm-6 col-md-4 col-lg-2">
+                <label for="cboTipoPlanilla" class="form-label small fw-bold text-muted">Tipo planilla</label>
+                <select id="cboTipoPlanilla" class="form-select form-select-sm" required disabled>
+                    <option value="">Seleccione...</option>
+                </select>
+            </div>
+            <div class="col-12 col-sm-6 col-md-4 col-lg-2">
+                <label for="cboPeriodo" class="form-label small fw-bold text-muted">Periodo</label>
+                <select id="cboPeriodo" class="form-select form-select-sm" required disabled>
+                    <option value="">Seleccione tipo de planilla...</option>
+                </select>
+            </div>
+            <div class="col-12 col-md-6 col-lg-3">
+                <label for="cboTrabajador" class="form-label small fw-bold text-muted">Empleado <span class="fw-normal opacity-75">(opcional)</span></label>
+                <select id="cboTrabajador" class="form-select form-select-sm" disabled>
+                    <option value="">Todos (por defecto)</option>
+                </select>
+            </div>
+            <div class="col-12 col-md-6 col-lg-3">
+                <label for="cboTipoDescanso" class="form-label small fw-bold text-muted">Tipo descanso</label>
+                <select id="cboTipoDescanso" class="form-select form-select-sm" required disabled>
+                    <option value="">Seleccione compañía...</option>
+                </select>
+            </div>
+            <div class="col-12 d-flex align-items-center flex-wrap gap-2 border-top pt-3 mt-3">
+                <button type="submit" class="btn btn-primary btn-sm px-4"><i class="bi bi-search"></i> Consultar</button>
+                <button type="button" class="btn btn-success btn-sm px-4" id="btnExportExcelDescMed" disabled><i class="bi bi-file-earmark-excel"></i> Exportar a Excel</button>
+                <span class="ms-auto text-muted small fw-bold">No. de Registros: <span id="lblRowCountDescMed">0</span></span>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card shadow-sm border-0 d-none" id="cardResultadoDescansosMedicos">
+    <div class="card-body">
+        <h4 class="text-center fw-bold mb-3">DETALLE DE DESCANSOS MÉDICOS</h4>
+        <div class="table-scroll-container">
+            <table class="table table-bordered table-sm table-hover table-planilla-vertical align-middle">
+                <thead id="thead-descansos-medicos"></thead>
+                <tbody id="tbody-descansos-medicos"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/filtros_reportes_planillas.js') }}"></script>
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', async function () {
+    const filtrosPersist = window.FiltrosPlanillasReportes && window.FiltrosPlanillasReportes.descansosMedicosDetalle
+        ? window.FiltrosPlanillasReportes.descansosMedicosDetalle()
+        : null;
+
+    const URL_REPORTE = {{ url_for('reporte_descansos_medicos_detalle_post') | tojson }};
+    const IDX_STICKY_1 = 1;
+    const IDX_STICKY_2 = 2;
+    const IDX_COL_DIAS = 5;
+    /** Centrados: Periodo (YYYY-MM), Fecha inicio, Fecha fin, CITT */
+    const IDX_CENTRO = new Set([0, 3, 4, 7]);
+
+    let lastExportDescansosMedicos = null;
+
+    function escapeHtml(s) {
+        return String(s || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    function optionExists(select, value) {
+        if (!select || value === '' || value == null) return false;
+        const v = String(value);
+        return Array.from(select.options).some((o) => o.value === v);
+    }
+
+    function seleccionarCompaniaInsensitive(select, codigoDeseado) {
+        if (!select) return false;
+        const want = String(codigoDeseado || '').trim().toUpperCase();
+        if (!want) return false;
+        const opt = Array.from(select.options).find((o) => String(o.value || '').trim().toUpperCase() === want);
+        if (!opt) return false;
+        select.value = opt.value;
+        return true;
+    }
+
+    function limpiarValorComboSiObsoleto(select) {
+        if (!select) return;
+        const v = String(select.value || '').trim();
+        if (!v) return;
+        const ok = Array.from(select.options).some((o) => String(o.value) === v);
+        if (!ok) select.value = '';
+    }
+
+    function etiquetaTrabajadorTodosPorDefecto(selectElement) {
+        if (!selectElement || !selectElement.options.length) return;
+        const o = selectElement.options[0];
+        if (o && o.value === '') o.textContent = 'Todos (por defecto)';
+    }
+
+    function fmtCelda(valor, opts) {
+        opts = opts || {};
+        if (valor === null || valor === undefined || valor === '') return '';
+        if (typeof valor === 'number' && Number.isFinite(valor)) {
+            if (opts.entero || Number.isInteger(valor)) {
+                return String(Math.round(valor));
+            }
+            return valor.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+        return String(valor);
+    }
+
+    function selectedText(id) {
+        const el = document.getElementById(id);
+        const opt = el && el.options[el.selectedIndex];
+        return opt ? opt.textContent.trim() : '';
+    }
+
+    function renderizarTablaDescansosMedicos(response) {
+        const thead = document.getElementById('thead-descansos-medicos');
+        const tbody = document.getElementById('tbody-descansos-medicos');
+        const headers = response.headers || [];
+
+        let htmlHeaders = '<tr>';
+        headers.forEach((header, index) => {
+            let sticky = '';
+            if (index === IDX_STICKY_1) sticky = 'sticky-col-1';
+            else if (index === IDX_STICKY_2) sticky = 'sticky-col-2';
+            const cen = IDX_CENTRO.has(index) ? ' text-center' : '';
+            htmlHeaders += `<th class="${sticky}${cen}">${escapeHtml(header)}</th>`;
+        });
+        htmlHeaders += '</tr>';
+        thead.innerHTML = htmlHeaders;
+
+        const filas = response.data || [];
+        let htmlBody = '';
+        filas.forEach((rowVals) => {
+            htmlBody += '<tr>';
+            (rowVals || []).forEach((valor, index) => {
+                let sticky = '';
+                if (index === IDX_STICKY_1) sticky = 'sticky-col-1 font-monospace fw-bold';
+                else if (index === IDX_STICKY_2) sticky = 'sticky-col-2 text-truncate';
+                const isNum = typeof valor === 'number' && Number.isFinite(valor);
+                let align = '';
+                if (IDX_CENTRO.has(index)) align = 'text-center';
+                else if (isNum && index === IDX_COL_DIAS) align = 'text-end';
+                const txt =
+                    isNum && index === IDX_COL_DIAS
+                        ? fmtCelda(valor, { entero: true })
+                        : isNum
+                            ? fmtCelda(valor)
+                            : escapeHtml(fmtCelda(valor));
+                htmlBody += `<td class="${[sticky, align].filter(Boolean).join(' ')}">${txt}</td>`;
+            });
+            htmlBody += '</tr>';
+        });
+
+        tbody.innerHTML = htmlBody;
+        document.getElementById('lblRowCountDescMed').textContent = String(filas.length);
+    }
+
+    async function exportDescansosMedicosExcel(payload, meta) {
+        if (typeof ExcelJS === 'undefined') {
+            alert('No se pudo cargar la librería de Excel (ExcelJS). Recargue la página e intente de nuevo.');
+            return;
+        }
+        const headers = payload.headers || [];
+        const filas = payload.data || [];
+        const ncols = headers.length;
+        if (!ncols) return;
+
+        const F = {
+            title: 'FFE9ECEF',
+            meta: 'FFF8F9FA',
+            header: 'FFF8F9FA',
+            data: 'FFFFFFFF'
+        };
+        const fill = (argb) => ({ type: 'pattern', pattern: 'solid', fgColor: { argb } });
+        const borderThin = { style: 'thin', color: { argb: 'FFCCCCCC' } };
+        const allBorders = { top: borderThin, left: borderThin, bottom: borderThin, right: borderThin };
+        const alignCenter = { horizontal: 'center', vertical: 'middle' };
+
+        const wb = new ExcelJS.Workbook();
+        const ws = wb.addWorksheet('Descansos médicos', { views: [{ showGridLines: true }] });
+
+        let rowIdx = 1;
+        ws.mergeCells(rowIdx, 1, rowIdx, ncols);
+        const titleCell = ws.getCell(rowIdx, 1);
+        titleCell.value = 'DETALLE DE DESCANSOS MÉDICOS';
+        titleCell.font = { bold: true, size: 14 };
+        titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+        titleCell.fill = fill(F.title);
+        titleCell.border = allBorders;
+        ws.getRow(rowIdx).height = 26;
+        rowIdx++;
+
+        const metaRow = ws.addRow([
+            'Compañía', meta.compania || '',
+            'Tipo planilla', meta.tipoPlanilla || '',
+            'Periodo', meta.periodo || '',
+            'Tipo descanso', meta.tipoDescanso || ''
+        ]);
+        metaRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+            if (colNumber <= 8) {
+                cell.fill = fill(F.meta);
+                cell.font = { bold: colNumber % 2 === 1 };
+                cell.alignment = alignCenter;
+            }
+            cell.border = allBorders;
+        });
+        rowIdx++;
+
+        ws.addRow([]);
+        rowIdx++;
+
+        const hRow = ws.addRow(headers);
+        hRow.font = { bold: true };
+        hRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+            const idx = colNumber - 1;
+            cell.fill = fill(F.header);
+            if (idx === IDX_COL_DIAS) {
+                cell.alignment = { horizontal: 'right', vertical: 'middle' };
+            } else if (IDX_CENTRO.has(idx)) {
+                cell.alignment = alignCenter;
+            } else if (idx === IDX_STICKY_2) {
+                cell.alignment = { horizontal: 'left', vertical: 'middle' };
+            } else {
+                cell.alignment = alignCenter;
+            }
+            cell.border = allBorders;
+        });
+        rowIdx++;
+
+        filas.forEach((rowVals) => {
+            const r = ws.addRow(rowVals || []);
+            r.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+                const idx = colNumber - 1;
+                const v = rowVals && rowVals[idx];
+                cell.fill = fill(F.data);
+                cell.border = allBorders;
+                if (idx === IDX_COL_DIAS && typeof v === 'number' && Number.isFinite(v)) {
+                    cell.numFmt = '0';
+                    cell.alignment = { horizontal: 'right', vertical: 'middle' };
+                } else if (typeof v === 'number' && Number.isFinite(v)) {
+                    cell.numFmt = '#,##0.00';
+                    cell.alignment = { horizontal: 'right', vertical: 'middle' };
+                } else if (IDX_CENTRO.has(idx)) {
+                    cell.alignment = alignCenter;
+                } else if (idx === IDX_STICKY_2) {
+                    cell.alignment = { horizontal: 'left', vertical: 'middle' };
+                } else {
+                    cell.alignment = alignCenter;
+                }
+            });
+            rowIdx++;
+        });
+
+        ws.getColumn(1).width = 14;
+        ws.getColumn(2).width = 12;
+        ws.getColumn(3).width = 36;
+        for (let c = 4; c <= ncols; c++) {
+            ws.getColumn(c).width = 14;
+        }
+        if (ncols >= 7) ws.getColumn(7).width = 32;
+        if (ncols >= 8) ws.getColumn(8).width = 16;
+
+        const buffer = await wb.xlsx.writeBuffer();
+        const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const safe = (s) => String(s || 'export').replace(/[\\/:*?"<>|]+/g, '_').trim().slice(0, 80);
+        const stamp = new Date().toISOString().slice(0, 10);
+        a.download = `detalle_descansos_medicos_${safe(meta.compania)}_${stamp}.xlsx`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+    }
+
+    async function ejecutarConsultaDescansosMedicos() {
+        lastExportDescansosMedicos = null;
+        document.getElementById('btnExportExcelDescMed').disabled = true;
+        if (filtrosPersist) filtrosPersist.guardar();
+        const cia = document.getElementById('cboCompania').value.trim();
+        const payroll_type = document.getElementById('cboTipoPlanilla').value.trim();
+        const period = document.getElementById('cboPeriodo').value.trim();
+        let person = document.getElementById('cboTrabajador').value.trim();
+        if (!person) person = '0';
+        let medicalresttype = document.getElementById('cboTipoDescanso').value.trim();
+        if (!medicalresttype) medicalresttype = '0';
+
+        try {
+            const res = await fetch(URL_REPORTE, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cia, payroll_type, period, person, medicalresttype })
+            });
+            const payload = await res.json();
+            if (!res.ok) {
+                document.getElementById('cardResultadoDescansosMedicos').classList.add('d-none');
+                document.getElementById('lblRowCountDescMed').textContent = '0';
+                alert(payload.error || 'Error al generar el reporte.');
+                return;
+            }
+            if (payload.error) {
+                document.getElementById('cardResultadoDescansosMedicos').classList.add('d-none');
+                document.getElementById('lblRowCountDescMed').textContent = '0';
+                alert(payload.error);
+                return;
+            }
+            if (!Array.isArray(payload.headers) || !Array.isArray(payload.data)) {
+                alert('Respuesta inválida del servidor.');
+                document.getElementById('cardResultadoDescansosMedicos').classList.add('d-none');
+                document.getElementById('lblRowCountDescMed').textContent = '0';
+                return;
+            }
+            document.getElementById('cardResultadoDescansosMedicos').classList.remove('d-none');
+            renderizarTablaDescansosMedicos(payload);
+            lastExportDescansosMedicos = {
+                headers: payload.headers,
+                data: payload.data,
+                meta: {
+                    compania: selectedText('cboCompania'),
+                    tipoPlanilla: selectedText('cboTipoPlanilla'),
+                    periodo: selectedText('cboPeriodo'),
+                    tipoDescanso: selectedText('cboTipoDescanso')
+                }
+            };
+            document.getElementById('btnExportExcelDescMed').disabled = false;
+        } catch (e) {
+            console.error(e);
+            document.getElementById('cardResultadoDescansosMedicos').classList.add('d-none');
+            document.getElementById('btnExportExcelDescMed').disabled = true;
+            document.getElementById('lblRowCountDescMed').textContent = '0';
+            alert('Error de red o del servidor.');
+        }
+    }
+
+    const poblarSelect = async (url, selectElement) => {
+        selectElement.innerHTML = '';
+        const loading = document.createElement('option');
+        loading.value = '';
+        loading.textContent = 'Cargando...';
+        selectElement.appendChild(loading);
+        try {
+            const res = await fetch(url);
+            const data = await res.json();
+            selectElement.innerHTML = '';
+            const def = document.createElement('option');
+            def.value = '';
+            def.textContent = 'Seleccione...';
+            selectElement.appendChild(def);
+            (Array.isArray(data) ? data : []).forEach((item) => {
+                const opt = document.createElement('option');
+                opt.value = item.id != null ? String(item.id) : '';
+                opt.textContent = item.text != null ? String(item.text) : '';
+                selectElement.appendChild(opt);
+            });
+            selectElement.disabled = false;
+        } catch (err) {
+            console.error(err);
+            selectElement.innerHTML = '<option value="">Error</option>';
+        }
+    };
+
+    /** Tipos de descanso por compañía; «Todos» envía @medicalresttype = '0'. */
+    async function poblarTiposDescansoMedicoDetalle(cia, selectElement) {
+        selectElement.innerHTML = '';
+        const loading = document.createElement('option');
+        loading.value = '';
+        loading.textContent = 'Cargando...';
+        selectElement.appendChild(loading);
+        try {
+            const res = await fetch(
+                `/api/selectores/tipos-descanso-medico?cia=${encodeURIComponent(cia)}`
+            );
+            const data = await res.json();
+            selectElement.innerHTML = '';
+            const optTodos = document.createElement('option');
+            optTodos.value = '0';
+            optTodos.textContent = 'Todos';
+            selectElement.appendChild(optTodos);
+            (Array.isArray(data) ? data : []).forEach((item) => {
+                const opt = document.createElement('option');
+                opt.value = item.id != null ? String(item.id) : '';
+                opt.textContent = item.text != null ? String(item.text) : '';
+                selectElement.appendChild(opt);
+            });
+            selectElement.value = '0';
+            selectElement.disabled = false;
+        } catch (err) {
+            console.error(err);
+            selectElement.innerHTML = '';
+            const optTodos = document.createElement('option');
+            optTodos.value = '0';
+            optTodos.textContent = 'Todos';
+            selectElement.appendChild(optTodos);
+            selectElement.value = '0';
+            selectElement.disabled = false;
+        }
+    }
+
+    async function poblarPeriodosDescansosMedicosDetalle(cia, payrolltype, selectElement) {
+        selectElement.innerHTML = '';
+        const loading = document.createElement('option');
+        loading.value = '';
+        loading.textContent = 'Cargando...';
+        selectElement.appendChild(loading);
+        try {
+            const res = await fetch(
+                `/api/selectores/periodos-asig?cia=${encodeURIComponent(cia)}&payrolltype=${encodeURIComponent(payrolltype)}`
+            );
+            const data = await res.json();
+            selectElement.innerHTML = '';
+            const optTodos = document.createElement('option');
+            optTodos.value = '0';
+            optTodos.textContent = 'Todos';
+            selectElement.appendChild(optTodos);
+            (Array.isArray(data) ? data : []).forEach((item) => {
+                const opt = document.createElement('option');
+                opt.value = item.id != null ? String(item.id) : '';
+                opt.textContent = item.text != null ? String(item.text) : '';
+                selectElement.appendChild(opt);
+            });
+            selectElement.value = '0';
+            selectElement.disabled = false;
+        } catch (err) {
+            console.error(err);
+            selectElement.innerHTML = '';
+            const optTodos = document.createElement('option');
+            optTodos.value = '0';
+            optTodos.textContent = 'Todos';
+            selectElement.appendChild(optTodos);
+            selectElement.value = '0';
+            selectElement.disabled = false;
+        }
+    }
+
+    const DEFAULT_CIA = 'BGT';
+    const cboCia = document.getElementById('cboCompania');
+    const cboPlanilla = document.getElementById('cboTipoPlanilla');
+    const cboTrabajador = document.getElementById('cboTrabajador');
+    const cboTipoDescanso = document.getElementById('cboTipoDescanso');
+
+    await poblarSelect('/api/selectores/companias', cboCia);
+    limpiarValorComboSiObsoleto(cboCia);
+
+    const guardadoObj = filtrosPersist ? filtrosPersist.leer() : null;
+    const ciaGuardada = guardadoObj ? String(guardadoObj.cia || '').trim() : '';
+    if (filtrosPersist && ciaGuardada) {
+        await filtrosPersist.aplicarRestauracionCascada({
+            poblarSelect,
+            poblarPeriodoVacaciones: poblarPeriodosDescansosMedicosDetalle,
+            poblarTiposDescansoMedico: poblarTiposDescansoMedicoDetalle
+        });
+        etiquetaTrabajadorTodosPorDefecto(cboTrabajador);
+    }
+
+    limpiarValorComboSiObsoleto(cboCia);
+    if (!String(cboCia.value || '').trim()) {
+        if (seleccionarCompaniaInsensitive(cboCia, DEFAULT_CIA)) {
+            const ciaNorm = cboCia.value.trim();
+            await poblarSelect(`/api/selectores/planillas?cia=${encodeURIComponent(ciaNorm)}`, cboPlanilla);
+            await poblarSelect(`/api/selectores/trabajadores?cia=${encodeURIComponent(ciaNorm)}`, cboTrabajador);
+            etiquetaTrabajadorTodosPorDefecto(cboTrabajador);
+            await poblarTiposDescansoMedicoDetalle(ciaNorm, cboTipoDescanso);
+        }
+    }
+
+    {
+        const cia = cboCia.value.trim();
+        const pt = document.getElementById('cboTipoPlanilla').value.trim();
+        const period = document.getElementById('cboPeriodo').value.trim();
+        if (cia && pt && period) {
+            await ejecutarConsultaDescansosMedicos();
+        }
+    }
+
+    document.getElementById('cboCompania').addEventListener('change', async function () {
+        const cia = this.value;
+        const cboPlanilla = document.getElementById('cboTipoPlanilla');
+        const cboTrabajador = document.getElementById('cboTrabajador');
+
+        document.getElementById('cboPeriodo').innerHTML =
+            '<option value="">Seleccione tipo de planilla...</option>';
+        document.getElementById('cboPeriodo').disabled = true;
+
+        const cboDm = document.getElementById('cboTipoDescanso');
+
+        if (cia) {
+            await poblarSelect(`/api/selectores/planillas?cia=${encodeURIComponent(cia)}`, cboPlanilla);
+            await poblarSelect(`/api/selectores/trabajadores?cia=${encodeURIComponent(cia)}`, cboTrabajador);
+            etiquetaTrabajadorTodosPorDefecto(cboTrabajador);
+            await poblarTiposDescansoMedicoDetalle(cia, cboDm);
+        } else {
+            cboPlanilla.innerHTML = '<option value="">Seleccione...</option>';
+            cboPlanilla.disabled = true;
+            cboTrabajador.innerHTML = '<option value="">Seleccione...</option>';
+            cboTrabajador.disabled = true;
+            etiquetaTrabajadorTodosPorDefecto(cboTrabajador);
+            cboDm.innerHTML = '<option value="">Seleccione compañía...</option>';
+            cboDm.disabled = true;
+        }
+    });
+
+    document.getElementById('cboTipoPlanilla').addEventListener('change', async function () {
+        const cia = document.getElementById('cboCompania').value;
+        const pt = this.value;
+        const cboPeriodo = document.getElementById('cboPeriodo');
+
+        document.getElementById('cboPeriodo').innerHTML =
+            '<option value="">Seleccione tipo de planilla...</option>';
+        document.getElementById('cboPeriodo').disabled = true;
+
+        if (pt && cia) {
+            await poblarPeriodosDescansosMedicosDetalle(cia, pt, cboPeriodo);
+        }
+    });
+
+    if (filtrosPersist) {
+        filtrosPersist.registrarGuardadoEnCambio();
+    }
+
+    document.getElementById('frmDescansosMedicosDetalle').addEventListener('submit', async function (e) {
+        e.preventDefault();
+        await ejecutarConsultaDescansosMedicos();
+    });
+
+    document.getElementById('btnExportExcelDescMed').addEventListener('click', async function () {
+        if (!lastExportDescansosMedicos || !lastExportDescansosMedicos.headers || !lastExportDescansosMedicos.headers.length) {
+            alert('Ejecute primero una búsqueda con resultados.');
+            return;
+        }
+        try {
+            await exportDescansosMedicosExcel(
+                { headers: lastExportDescansosMedicos.headers, data: lastExportDescansosMedicos.data },
+                lastExportDescansosMedicos.meta
+            );
+        } catch (err) {
+            console.error(err);
+            alert('No se pudo generar el archivo Excel.');
+        }
+    });
+});
+</script>
+{% endblock %}

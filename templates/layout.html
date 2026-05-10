@@ -151,6 +151,18 @@
                     </a>
                 </li>
 
+                <li class="{{ 'active' if request.endpoint == 'reporte_vacaciones_detalle_page' else '' }}">
+                    <a href="{{ url_for('reporte_vacaciones_detalle_page') }}">
+                        <i class="bi bi-calendar-range"></i> Detalle de vacaciones
+                    </a>
+                </li>
+
+                <li class="{{ 'active' if request.endpoint == 'reporte_descansos_medicos_detalle_page' else '' }}">
+                    <a href="{{ url_for('reporte_descansos_medicos_detalle_page') }}">
+                        <i class="bi bi-heart-pulse"></i> Detalle de descansos médicos
+                    </a>
+                </li>
+
                 <li class="py-0">
                     <p class="sidebar-section-title px-3 mt-4 mb-0 text-uppercase fw-bold opacity-50">Documentos</p>
                 </li>

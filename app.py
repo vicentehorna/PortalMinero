@@ -133,6 +133,16 @@ def _normalize_pr_period(period_raw):
     return str(period_raw or '').strip()
 
 
+def _fmt_periodo_yyyy_mm(val):
+    """Periodo para columnas de reporte: YYYY-MM (p. ej. 20250301 → 2025-03)."""
+    if val is None:
+        return ''
+    s = re.sub(r'\D', '', str(val).strip())
+    if len(s) >= 6:
+        return f'{s[:4]}-{s[4:6]}'
+    return str(val).strip()
+
+
 def _report_params_from_json(req):
     """Extrae y normaliza los 4 parámetros del SP (mismo orden que SSMS)."""
     body = req.get_json(silent=True) or {}
@@ -568,6 +578,18 @@ def reporte_planilla_vertical_page():
     return render_template('reporte_planilla_vertical.html')
 
 
+@app.route('/reporte-vacaciones-detalle')
+@login_required
+def reporte_vacaciones_detalle_page():
+    return render_template('reporte_vacaciones_detalle.html')
+
+
+@app.route('/reporte-descansos-medicos-detalle')
+@login_required
+def reporte_descansos_medicos_detalle_page():
+    return render_template('reporte_descansos_medicos_detalle.html')
+
+
 @app.route('/procesar_planilla')
 @login_required
 def procesar_planilla_page():
@@ -989,6 +1011,80 @@ def api_periodos():
                 pass
 
 
+@app.route('/api/selectores/periodos-asig')
+@login_required
+def api_periodos_asig():
+    """sp_pr_selectorperiodos_asig_web @cia, @payrolltype → PRPERIOD (id), description (text)."""
+    cia = request.args.get('cia')
+    payrolltype = request.args.get('payrolltype')
+    if not cia or not payrolltype:
+        return jsonify([])
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "EXEC sp_pr_selectorperiodos_asig_web @cia=?, @payrolltype=?",
+            (cia, payrolltype),
+        )
+        desc = cursor.description
+        rows = cursor.fetchall()
+        if not rows or not desc:
+            return jsonify([])
+        cols = [str(c[0] or '').strip().lower() for c in desc]
+        data = []
+        for row in rows:
+            rd = {cols[i]: row[i] for i in range(len(cols))}
+            pid = rd.get('prperiod')
+            txt = rd.get('description')
+            pid_s = str(pid).strip() if pid is not None else ''
+            txt_s = str(txt).strip() if txt is not None else pid_s
+            if pid_s:
+                data.append({"id": pid_s, "text": txt_s})
+        return jsonify(data)
+    except Exception:
+        logging.exception("api_periodos_asig")
+        return jsonify([])
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+@app.route('/api/selectores/unidades')
+@login_required
+def api_unidades():
+    """sp_pr_selectorunidades_web → ReplicationUnit, Description (status = 'A')."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("EXEC sp_pr_selectorunidades_web")
+        rows = cursor.fetchall()
+        data = []
+        for r in rows:
+            try:
+                rid = str(r.ReplicationUnit).strip()
+                txt = str(r.Description).strip()
+            except Exception:
+                rid = str(r[0]).strip() if len(r) > 0 else ''
+                txt = str(r[1]).strip() if len(r) > 1 else rid
+            if rid:
+                data.append({"id": rid, "text": txt})
+        return jsonify(data)
+    except Exception:
+        logging.exception("api_unidades")
+        return jsonify([])
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 @app.route('/api/selectores/trabajadores')
 @login_required
 def api_trabajadores():
@@ -1006,6 +1102,41 @@ def api_trabajadores():
         return jsonify(data)
     except Exception:
         logging.exception("api_trabajadores")
+        return jsonify([])
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+@app.route('/api/selectores/tipos-descanso-medico')
+@login_required
+def api_tipos_descanso_medico():
+    """sp_pr_selectortipos_dm_web @cia → MedicalRestType, Description."""
+    cia = request.args.get('cia')
+    if not cia:
+        return jsonify([])
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("EXEC sp_pr_selectortipos_dm_web @cia=?", (cia,))
+        col_names = [str(c[0]).strip() for c in (cursor.description or [])]
+        rows = cursor.fetchall()
+        data = []
+        for row in rows:
+            rd = _row_dict_from_columns(col_names, row)
+            data.append(
+                {
+                    "id": rd.get("medicalresttype"),
+                    "text": rd.get("description"),
+                }
+            )
+        return jsonify(data)
+    except Exception:
+        logging.exception("api_tipos_descanso_medico")
         return jsonify([])
     finally:
         if conn:
@@ -1363,6 +1494,141 @@ def reporte_planilla_vertical_post():
                 pass
 
 
+@app.route('/reporte_vacaciones_detalle', methods=['POST'])
+@login_required
+def reporte_vacaciones_detalle_post():
+    """sp_pr_r019_vacationdetail_web @cia, @payrolltype, @period, @person."""
+    body = request.get_json(silent=True) or {}
+    cia = str(body.get('cia') or '').strip()
+    payroll_type = str(body.get('payroll_type') or body.get('payrolltype') or '').strip()
+    period_raw = body.get('period')
+    ps = str(period_raw).strip() if period_raw is not None else ''
+    if ps == '' or ps == '0':
+        period = '0'
+    else:
+        period = _normalize_pr_period(period_raw)
+    person = str(body.get('person') or '0').strip() or '0'
+
+    if not cia:
+        return jsonify({"error": "Seleccione una compañía."}), 400
+    if not payroll_type:
+        return jsonify({"error": "Debe indicar tipo de planilla."}), 400
+
+    headers_es = [
+        'Periodo',
+        'Código',
+        'Nombre',
+        'Fecha inicio',
+        'Fecha fin',
+        'Días',
+        'Año control',
+        'Cargo',
+    ]
+    keys_datos = ['person', 'name', 'datebegin', 'dateend', 'days', 'controlyear', 'cargo']
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "EXEC sp_pr_r019_vacationdetail_web @cia=?, @payrolltype=?, @period=?, @person=?",
+            (cia, payroll_type, period, person),
+        )
+        rows = _dicts_first_nonempty_resultset(cursor)
+        resultado = []
+        for r in rows:
+            fila = [_fmt_periodo_yyyy_mm(r.get('prperiod'))]
+            for key in keys_datos:
+                val = r.get(key)
+                if key == 'days' and val is not None:
+                    try:
+                        fila.append(int(round(float(val))))
+                    except Exception:
+                        fila.append(_jsonable_value(val))
+                else:
+                    fila.append(_jsonable_value(val))
+            resultado.append(fila)
+        return jsonify({"headers": headers_es, "data": resultado})
+    except Exception as e:
+        logging.exception("reporte_vacaciones_detalle_post")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+@app.route('/reporte_descansos_medicos_detalle', methods=['POST'])
+@login_required
+def reporte_descansos_medicos_detalle_post():
+    """sp_pr_reportesdescansos_medicos_web @cia, @payrolltype, @period, @person, @medicalresttype."""
+    body = request.get_json(silent=True) or {}
+    cia = str(body.get('cia') or '').strip()
+    payroll_type = str(body.get('payroll_type') or body.get('payrolltype') or '').strip()
+    period_raw = body.get('period')
+    ps = str(period_raw).strip() if period_raw is not None else ''
+    if ps == '' or ps == '0':
+        period = '0'
+    else:
+        period = _normalize_pr_period(period_raw)
+    person = str(body.get('person') or '0').strip() or '0'
+    mrt_raw = body.get('medicalresttype')
+    mrs = str(mrt_raw).strip() if mrt_raw is not None else ''
+    medicalresttype = '0' if mrs == '' or mrs == '0' else mrs
+
+    if not cia:
+        return jsonify({"error": "Seleccione una compañía."}), 400
+    if not payroll_type:
+        return jsonify({"error": "Debe indicar tipo de planilla."}), 400
+
+    headers_es = [
+        'Periodo',
+        'Código',
+        'Nombre',
+        'Fecha inicio',
+        'Fecha fin',
+        'Días',
+        'Tipo de descanso',
+        'CITT',
+    ]
+    keys_datos = ['person', 'name', 'datebegin', 'dateend', 'days', 'description', 'citt']
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "EXEC sp_pr_reportesdescansos_medicos_web @cia=?, @payrolltype=?, @period=?, @person=?, @medicalresttype=?",
+            (cia, payroll_type, period, person, medicalresttype),
+        )
+        rows = _dicts_first_nonempty_resultset(cursor)
+        resultado = []
+        for r in rows:
+            fila = [_fmt_periodo_yyyy_mm(r.get('prperiod'))]
+            for key in keys_datos:
+                val = r.get(key)
+                if key == 'days' and val is not None:
+                    try:
+                        fila.append(int(round(float(val))))
+                    except Exception:
+                        fila.append(_jsonable_value(val))
+                else:
+                    fila.append(_jsonable_value(val))
+            resultado.append(fila)
+        return jsonify({"headers": headers_es, "data": resultado})
+    except Exception as e:
+        logging.exception("reporte_descansos_medicos_detalle_post")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 # ==========================================
 # API Procesar planilla (cálculo) — SPs dedicados
 # ==========================================
@@ -1447,14 +1713,33 @@ def api_procesar_planilla_periodos_list():
                 pass
 
 
+def _fecha_tabla_json(val):
+    """Serializa fecha/datetime para columnas de listados (JSON)."""
+    if val is None:
+        return ''
+    if isinstance(val, datetime):
+        return val.strftime('%d/%m/%Y')
+    if isinstance(val, date):
+        return val.strftime('%d/%m/%Y')
+    return str(val).strip()
+
+
 @app.route('/api/procesar-planilla/trabajadores-calculo', methods=['POST'])
 @login_required
 def api_procesar_planilla_trabajadores():
-    """sp_pr_calcularplanillas_web @cia, @payrolltype, @period → name, person, …"""
+    """sp_pr_calcularplanillas_web @cia, @payrolltype, @period, @cesados, @repunit → name, person, entrydate, ceasedate…"""
     body = request.get_json(silent=True) or {}
     cia = str(body.get('cia') or '').strip()
     payrolltype = str(body.get('payrolltype') or '').strip()
     period = _normalize_pr_period(body.get('period'))
+    cesados = str(body.get('cesados') or 'T').strip().upper()
+    if cesados not in ('T', 'Y', 'N'):
+        cesados = 'T'
+    repunit = str(body.get('repunit') or body.get('unidad') or '0').strip()
+    if not repunit:
+        repunit = '0'
+    if len(repunit) > 20:
+        repunit = repunit[:20]
     if not cia or not payrolltype or not period:
         return jsonify({"error": "Faltan compañía, tipo de planilla o periodo."}), 400
     conn = None
@@ -1462,14 +1747,16 @@ def api_procesar_planilla_trabajadores():
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
-            "EXEC sp_pr_calcularplanillas_web @cia=?, @payrolltype=?, @period=?",
-            (cia, payrolltype, period),
+            "EXEC sp_pr_calcularplanillas_web @cia=?, @payrolltype=?, @period=?, @cesados=?, @repunit=?",
+            (cia, payrolltype, period, cesados, repunit),
         )
         rows = _dicts_first_nonempty_resultset(cursor)
         trabajadores = [
             {
                 "person": str(r.get("person") or "").strip(),
                 "name": str(r.get("name") or "").strip(),
+                "entrydate": _fecha_tabla_json(r.get("entrydate")),
+                "ceasedate": _fecha_tabla_json(r.get("ceasedate")),
             }
             for r in rows
             if str(r.get("person") or "").strip()
