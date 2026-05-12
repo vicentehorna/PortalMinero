@@ -1,6 +1,6 @@
 {% extends "layout.html" %}
 
-{% block title %}Detalle de descansos médicos{% endblock %}
+{% block title %}Saldo de vacaciones{% endblock %}
 
 {% block extra_css %}
 <style>
@@ -57,62 +57,74 @@
         z-index: 3;
         background-color: #f8f9fa;
     }
+
+    /* Filas con saldo vencido a favor del trabajador (días por pagar / obligación) */
+    .table-planilla-vertical tbody tr.fila-vencidos-saldo td {
+        background-color: #fde68a;
+    }
+
+    .table-planilla-vertical tbody tr.fila-vencidos-saldo td.sticky-col-1,
+    .table-planilla-vertical tbody tr.fila-vencidos-saldo td.sticky-col-2 {
+        background-color: #fde68a !important;
+    }
 </style>
 {% endblock %}
 
 {% block content %}
 <div class="card shadow-sm border-0 mb-4">
     <div class="card-header bg-white border-bottom-0 pt-4 pb-0">
-        <h5 class="mb-0 fw-bold text-secondary"><i class="bi bi-heart-pulse"></i> Detalle de descansos médicos</h5>
+        <h5 class="mb-0 fw-bold text-secondary"><i class="bi bi-pie-chart"></i> Saldo de vacaciones</h5>
     </div>
     <div class="card-body">
-        <form id="frmDescansosMedicosDetalle" class="row g-3">
-            <div class="col-12 col-sm-6 col-md-4 col-lg-2">
+        <form id="frmSaldoVacaciones" class="row g-3">
+            <div class="col-6 col-md-2 col-lg-2">
                 <label for="cboCompania" class="form-label small fw-bold text-muted">Compañía</label>
                 <select id="cboCompania" class="form-select form-select-sm" required>
                     <option value="">Seleccione...</option>
                 </select>
             </div>
-            <div class="col-12 col-sm-6 col-md-4 col-lg-2">
+            <div class="col-6 col-md-2 col-lg-2">
                 <label for="cboTipoPlanilla" class="form-label small fw-bold text-muted">Tipo planilla</label>
                 <select id="cboTipoPlanilla" class="form-select form-select-sm" required disabled>
                     <option value="">Seleccione...</option>
                 </select>
             </div>
-            <div class="col-12 col-sm-6 col-md-4 col-lg-2">
-                <label for="cboPeriodo" class="form-label small fw-bold text-muted">Periodo</label>
-                <select id="cboPeriodo" class="form-select form-select-sm" required disabled>
-                    <option value="">Seleccione tipo de planilla...</option>
+            <div class="col-6 col-md-2 col-lg-2">
+                <label for="inpFechaCorte" class="form-label small fw-bold text-muted">Fecha de corte</label>
+                <input type="date" id="inpFechaCorte" class="form-control form-control-sm" required
+                       style="max-width: 11rem;"
+                       value="{{ now.strftime('%Y-%m-%d') }}">
+            </div>
+            <div class="col-6 col-md-2 col-lg-2">
+                <label for="cboCesadosSaldo" class="form-label small fw-bold text-muted">Cesados</label>
+                <select id="cboCesadosSaldo" class="form-select form-select-sm">
+                    <option value="T" selected>Todos</option>
+                    <option value="Y">Sí</option>
+                    <option value="N">No</option>
                 </select>
             </div>
-            <div class="col-12 col-md-6 col-lg-3">
+            <div class="col-12 col-md-4 col-lg-4">
                 <label for="cboTrabajador" class="form-label small fw-bold text-muted">Empleado <span class="fw-normal opacity-75">(opcional)</span></label>
                 <select id="cboTrabajador" class="form-select form-select-sm" disabled>
                     <option value="">Todos (por defecto)</option>
                 </select>
             </div>
-            <div class="col-12 col-md-6 col-lg-3">
-                <label for="cboTipoDescanso" class="form-label small fw-bold text-muted">Tipo descanso</label>
-                <select id="cboTipoDescanso" class="form-select form-select-sm" required disabled>
-                    <option value="">Seleccione compañía...</option>
-                </select>
-            </div>
             <div class="col-12 d-flex align-items-center flex-wrap gap-2 border-top pt-3 mt-3">
                 <button type="submit" class="btn btn-primary btn-sm px-4"><i class="bi bi-search"></i> Consultar</button>
-                <button type="button" class="btn btn-success btn-sm px-4" id="btnExportExcelDescMed" disabled><i class="bi bi-file-earmark-excel"></i> Exportar a Excel</button>
-                <span class="ms-auto text-muted small fw-bold">No. de Registros: <span id="lblRowCountDescMed">0</span></span>
+                <button type="button" class="btn btn-success btn-sm px-4" id="btnExportExcelSaldoVac" disabled><i class="bi bi-file-earmark-excel"></i> Exportar a Excel</button>
+                <span class="ms-auto text-muted small fw-bold">No. de Registros: <span id="lblRowCountSaldoVac">0</span></span>
             </div>
         </form>
     </div>
 </div>
 
-<div class="card shadow-sm border-0 d-none" id="cardResultadoDescansosMedicos">
+<div class="card shadow-sm border-0 d-none" id="cardResultadoSaldoVacaciones">
     <div class="card-body">
-        <h4 class="text-center fw-bold mb-3">DETALLE DE DESCANSOS MÉDICOS</h4>
+        <h4 class="text-center fw-bold mb-3">SALDO DE VACACIONES</h4>
         <div class="table-scroll-container">
             <table class="table table-bordered table-sm table-hover table-planilla-vertical align-middle">
-                <thead id="thead-descansos-medicos"></thead>
-                <tbody id="tbody-descansos-medicos"></tbody>
+                <thead id="thead-saldo-vacaciones"></thead>
+                <tbody id="tbody-saldo-vacaciones"></tbody>
             </table>
         </div>
     </div>
@@ -124,18 +136,20 @@
 <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 <script>
 document.addEventListener('DOMContentLoaded', async function () {
-    const filtrosPersist = window.FiltrosPlanillasReportes && window.FiltrosPlanillasReportes.descansosMedicosDetalle
-        ? window.FiltrosPlanillasReportes.descansosMedicosDetalle()
+    const filtrosPersist = window.FiltrosPlanillasReportes && window.FiltrosPlanillasReportes.saldoVacaciones
+        ? window.FiltrosPlanillasReportes.saldoVacaciones()
         : null;
 
-    const URL_REPORTE = {{ url_for('reporte_descansos_medicos_detalle_post') | tojson }};
-    const IDX_STICKY_1 = 1;
-    const IDX_STICKY_2 = 2;
-    const IDX_COL_DIAS = 5;
-    /** Centrados: Periodo (YYYY-MM), Fecha inicio, Fecha fin, CITT */
-    const IDX_CENTRO = new Set([0, 3, 4, 7]);
+    const URL_REPORTE = {{ url_for('reporte_saldo_vacaciones_post') | tojson }};
+    /** Sticky: Código + Nombre (índices 0 y 1). */
+    const IDX_STICKY_1 = 0;
+    const IDX_STICKY_2 = 1;
+    const IDX_TOMADOS = 7;
+    const IDX_DECIMAL_2 = new Set([8, 9]);
+    const IDX_VENCIDOS = 9;
+    const IDX_CENTRO = new Set([2, 3, 4, 5, 6]);
 
-    let lastExportDescansosMedicos = null;
+    let lastExportSaldoVacaciones = null;
 
     function escapeHtml(s) {
         return String(s || '')
@@ -192,9 +206,29 @@ document.addEventListener('DOMContentLoaded', async function () {
         return opt ? opt.textContent.trim() : '';
     }
 
-    function renderizarTablaDescansosMedicos(response) {
-        const thead = document.getElementById('thead-descansos-medicos');
-        const tbody = document.getElementById('tbody-descansos-medicos');
+    function fechaCorteTexto() {
+        const el = document.getElementById('inpFechaCorte');
+        if (!el || !el.value) return '';
+        const d = el.value;
+        const [y, m, day] = d.split('-');
+        return `${day}/${m}/${y}`;
+    }
+
+    /** Índice columna «Vencidos»; > 0 resalta la fila (vacaciones adeudadas). */
+    function valorVencidosNumero(rowVals) {
+        const arr = rowVals || [];
+        if (arr.length <= IDX_VENCIDOS) return 0;
+        const raw = arr[IDX_VENCIDOS];
+        if (raw === null || raw === undefined || raw === '') return 0;
+        if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+        const s = String(raw).replace(/\s/g, '').replace(',', '.');
+        const n = parseFloat(s);
+        return Number.isFinite(n) ? n : 0;
+    }
+
+    function renderizarTablaSaldoVacaciones(response) {
+        const thead = document.getElementById('thead-saldo-vacaciones');
+        const tbody = document.getElementById('tbody-saldo-vacaciones');
         const headers = response.headers || [];
 
         let htmlHeaders = '<tr>';
@@ -211,7 +245,9 @@ document.addEventListener('DOMContentLoaded', async function () {
         const filas = response.data || [];
         let htmlBody = '';
         filas.forEach((rowVals) => {
-            htmlBody += '<tr>';
+            const marcarVencido = valorVencidosNumero(rowVals) > 0;
+            const trCls = marcarVencido ? ' class="fila-vencidos-saldo"' : '';
+            htmlBody += `<tr${trCls}>`;
             (rowVals || []).forEach((valor, index) => {
                 let sticky = '';
                 if (index === IDX_STICKY_1) sticky = 'sticky-col-1 font-monospace fw-bold';
@@ -219,23 +255,28 @@ document.addEventListener('DOMContentLoaded', async function () {
                 const isNum = typeof valor === 'number' && Number.isFinite(valor);
                 let align = '';
                 if (IDX_CENTRO.has(index)) align = 'text-center';
-                else if (isNum && index === IDX_COL_DIAS) align = 'text-end';
-                const txt =
-                    isNum && index === IDX_COL_DIAS
-                        ? fmtCelda(valor, { entero: true })
-                        : isNum
-                            ? fmtCelda(valor)
-                            : escapeHtml(fmtCelda(valor));
+                else if (isNum && index === IDX_TOMADOS) align = 'text-end';
+                else if (isNum && IDX_DECIMAL_2.has(index)) align = 'text-end';
+                let txt;
+                if (isNum && index === IDX_TOMADOS) {
+                    txt = fmtCelda(valor, { entero: true });
+                } else if (isNum && IDX_DECIMAL_2.has(index)) {
+                    txt = fmtCelda(valor);
+                } else if (isNum) {
+                    txt = fmtCelda(valor);
+                } else {
+                    txt = escapeHtml(fmtCelda(valor));
+                }
                 htmlBody += `<td class="${[sticky, align].filter(Boolean).join(' ')}">${txt}</td>`;
             });
             htmlBody += '</tr>';
         });
 
         tbody.innerHTML = htmlBody;
-        document.getElementById('lblRowCountDescMed').textContent = String(filas.length);
+        document.getElementById('lblRowCountSaldoVac').textContent = String(filas.length);
     }
 
-    async function exportDescansosMedicosExcel(payload, meta) {
+    async function exportSaldoVacacionesExcel(payload, meta) {
         if (typeof ExcelJS === 'undefined') {
             alert('No se pudo cargar la librería de Excel (ExcelJS). Recargue la página e intente de nuevo.');
             return;
@@ -249,7 +290,8 @@ document.addEventListener('DOMContentLoaded', async function () {
             title: 'FFE9ECEF',
             meta: 'FFF8F9FA',
             header: 'FFF8F9FA',
-            data: 'FFFFFFFF'
+            data: 'FFFFFFFF',
+            dataVencido: 'FFFDE68A'
         };
         const fill = (argb) => ({ type: 'pattern', pattern: 'solid', fgColor: { argb } });
         const borderThin = { style: 'thin', color: { argb: 'FFCCCCCC' } };
@@ -257,12 +299,12 @@ document.addEventListener('DOMContentLoaded', async function () {
         const alignCenter = { horizontal: 'center', vertical: 'middle' };
 
         const wb = new ExcelJS.Workbook();
-        const ws = wb.addWorksheet('Descansos médicos', { views: [{ showGridLines: true }] });
+        const ws = wb.addWorksheet('SaldoVacaciones', { views: [{ showGridLines: true }] });
 
         let rowIdx = 1;
         ws.mergeCells(rowIdx, 1, rowIdx, ncols);
         const titleCell = ws.getCell(rowIdx, 1);
-        titleCell.value = 'DETALLE DE DESCANSOS MÉDICOS';
+        titleCell.value = 'SALDO DE VACACIONES';
         titleCell.font = { bold: true, size: 14 };
         titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
         titleCell.fill = fill(F.title);
@@ -273,11 +315,12 @@ document.addEventListener('DOMContentLoaded', async function () {
         const metaRow = ws.addRow([
             'Compañía', meta.compania || '',
             'Tipo planilla', meta.tipoPlanilla || '',
-            'Periodo', meta.periodo || '',
-            'Tipo descanso', meta.tipoDescanso || ''
+            'Fecha corte', meta.fechaCorte || '',
+            'Cesados', meta.cesados || '',
+            'Empleado', meta.empleado || ''
         ]);
         metaRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-            if (colNumber <= 8) {
+            if (colNumber <= 10) {
                 cell.fill = fill(F.meta);
                 cell.font = { bold: colNumber % 2 === 1 };
                 cell.alignment = alignCenter;
@@ -294,7 +337,9 @@ document.addEventListener('DOMContentLoaded', async function () {
         hRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
             const idx = colNumber - 1;
             cell.fill = fill(F.header);
-            if (idx === IDX_COL_DIAS) {
+            if (idx === IDX_TOMADOS) {
+                cell.alignment = { horizontal: 'right', vertical: 'middle' };
+            } else if (IDX_DECIMAL_2.has(idx)) {
                 cell.alignment = { horizontal: 'right', vertical: 'middle' };
             } else if (IDX_CENTRO.has(idx)) {
                 cell.alignment = alignCenter;
@@ -308,16 +353,17 @@ document.addEventListener('DOMContentLoaded', async function () {
         rowIdx++;
 
         filas.forEach((rowVals) => {
+            const marcarVencido = valorVencidosNumero(rowVals) > 0;
             const r = ws.addRow(rowVals || []);
             r.eachCell({ includeEmpty: true }, (cell, colNumber) => {
                 const idx = colNumber - 1;
                 const v = rowVals && rowVals[idx];
-                cell.fill = fill(F.data);
+                cell.fill = fill(marcarVencido ? F.dataVencido : F.data);
                 cell.border = allBorders;
-                if (idx === IDX_COL_DIAS && typeof v === 'number' && Number.isFinite(v)) {
+                if (idx === IDX_TOMADOS && typeof v === 'number' && Number.isFinite(v)) {
                     cell.numFmt = '0';
                     cell.alignment = { horizontal: 'right', vertical: 'middle' };
-                } else if (typeof v === 'number' && Number.isFinite(v)) {
+                } else if (IDX_DECIMAL_2.has(idx) && typeof v === 'number' && Number.isFinite(v)) {
                     cell.numFmt = '#,##0.00';
                     cell.alignment = { horizontal: 'right', vertical: 'middle' };
                 } else if (IDX_CENTRO.has(idx)) {
@@ -331,14 +377,12 @@ document.addEventListener('DOMContentLoaded', async function () {
             rowIdx++;
         });
 
-        ws.getColumn(1).width = 14;
-        ws.getColumn(2).width = 12;
+        ws.getColumn(1).width = 12;
+        ws.getColumn(2).width = 14;
         ws.getColumn(3).width = 36;
         for (let c = 4; c <= ncols; c++) {
             ws.getColumn(c).width = 14;
         }
-        if (ncols >= 7) ws.getColumn(7).width = 32;
-        if (ncols >= 8) ws.getColumn(8).width = 16;
 
         const buffer = await wb.xlsx.writeBuffer();
         const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
@@ -347,68 +391,68 @@ document.addEventListener('DOMContentLoaded', async function () {
         a.href = url;
         const safe = (s) => String(s || 'export').replace(/[\\/:*?"<>|]+/g, '_').trim().slice(0, 80);
         const stamp = new Date().toISOString().slice(0, 10);
-        a.download = `detalle_descansos_medicos_${safe(meta.compania)}_${stamp}.xlsx`;
+        a.download = `saldo_vacaciones_${safe(meta.compania)}_${stamp}.xlsx`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         window.URL.revokeObjectURL(url);
     }
 
-    async function ejecutarConsultaDescansosMedicos() {
-        lastExportDescansosMedicos = null;
-        document.getElementById('btnExportExcelDescMed').disabled = true;
+    async function ejecutarConsultaSaldoVacaciones() {
+        lastExportSaldoVacaciones = null;
+        document.getElementById('btnExportExcelSaldoVac').disabled = true;
         if (filtrosPersist) filtrosPersist.guardar();
         const cia = document.getElementById('cboCompania').value.trim();
         const payroll_type = document.getElementById('cboTipoPlanilla').value.trim();
-        const period = document.getElementById('cboPeriodo').value.trim();
+        const date = document.getElementById('inpFechaCorte').value.trim();
+        const cesados = (document.getElementById('cboCesadosSaldo') || {}).value || 'T';
         let person = document.getElementById('cboTrabajador').value.trim();
         if (!person) person = '0';
-        let medicalresttype = document.getElementById('cboTipoDescanso').value.trim();
-        if (!medicalresttype) medicalresttype = '0';
 
         try {
             const res = await fetch(URL_REPORTE, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ cia, payroll_type, period, person, medicalresttype })
+                body: JSON.stringify({ cia, payroll_type, date, person, cesados })
             });
             const payload = await res.json();
             if (!res.ok) {
-                document.getElementById('cardResultadoDescansosMedicos').classList.add('d-none');
-                document.getElementById('lblRowCountDescMed').textContent = '0';
+                document.getElementById('cardResultadoSaldoVacaciones').classList.add('d-none');
+                document.getElementById('lblRowCountSaldoVac').textContent = '0';
                 alert(payload.error || 'Error al generar el reporte.');
                 return;
             }
             if (payload.error) {
-                document.getElementById('cardResultadoDescansosMedicos').classList.add('d-none');
-                document.getElementById('lblRowCountDescMed').textContent = '0';
+                document.getElementById('cardResultadoSaldoVacaciones').classList.add('d-none');
+                document.getElementById('lblRowCountSaldoVac').textContent = '0';
                 alert(payload.error);
                 return;
             }
             if (!Array.isArray(payload.headers) || !Array.isArray(payload.data)) {
                 alert('Respuesta inválida del servidor.');
-                document.getElementById('cardResultadoDescansosMedicos').classList.add('d-none');
-                document.getElementById('lblRowCountDescMed').textContent = '0';
+                document.getElementById('cardResultadoSaldoVacaciones').classList.add('d-none');
+                document.getElementById('lblRowCountSaldoVac').textContent = '0';
                 return;
             }
-            document.getElementById('cardResultadoDescansosMedicos').classList.remove('d-none');
-            renderizarTablaDescansosMedicos(payload);
-            lastExportDescansosMedicos = {
+            document.getElementById('cardResultadoSaldoVacaciones').classList.remove('d-none');
+            renderizarTablaSaldoVacaciones(payload);
+            lastExportSaldoVacaciones = {
                 headers: payload.headers,
                 data: payload.data,
                 meta: {
                     compania: selectedText('cboCompania'),
                     tipoPlanilla: selectedText('cboTipoPlanilla'),
-                    periodo: selectedText('cboPeriodo'),
-                    tipoDescanso: selectedText('cboTipoDescanso')
+                    fechaCorte: fechaCorteTexto(),
+                    cesados: selectedText('cboCesadosSaldo'),
+                    empleado: selectedText('cboTrabajador') || 'Todos'
                 }
             };
-            document.getElementById('btnExportExcelDescMed').disabled = false;
+            document.getElementById('btnExportExcelSaldoVac').disabled = false;
         } catch (e) {
             console.error(e);
-            document.getElementById('cardResultadoDescansosMedicos').classList.add('d-none');
-            document.getElementById('btnExportExcelDescMed').disabled = true;
-            document.getElementById('lblRowCountDescMed').textContent = '0';
+            document.getElementById('cardResultadoSaldoVacaciones').classList.add('d-none');
+            document.getElementById('btnExportExcelSaldoVac').disabled = true;
+            document.getElementById('lblRowCountSaldoVac').textContent = '0';
             alert('Error de red o del servidor.');
         }
     }
@@ -440,84 +484,10 @@ document.addEventListener('DOMContentLoaded', async function () {
         }
     };
 
-    /** Tipos de descanso por compañía; «Todos» envía @medicalresttype = '0'. */
-    async function poblarTiposDescansoMedicoDetalle(cia, selectElement) {
-        selectElement.innerHTML = '';
-        const loading = document.createElement('option');
-        loading.value = '';
-        loading.textContent = 'Cargando...';
-        selectElement.appendChild(loading);
-        try {
-            const res = await fetch(
-                `/api/selectores/tipos-descanso-medico?cia=${encodeURIComponent(cia)}`
-            );
-            const data = await res.json();
-            selectElement.innerHTML = '';
-            const optTodos = document.createElement('option');
-            optTodos.value = '0';
-            optTodos.textContent = 'Todos';
-            selectElement.appendChild(optTodos);
-            (Array.isArray(data) ? data : []).forEach((item) => {
-                const opt = document.createElement('option');
-                opt.value = item.id != null ? String(item.id) : '';
-                opt.textContent = item.text != null ? String(item.text) : '';
-                selectElement.appendChild(opt);
-            });
-            selectElement.value = '0';
-            selectElement.disabled = false;
-        } catch (err) {
-            console.error(err);
-            selectElement.innerHTML = '';
-            const optTodos = document.createElement('option');
-            optTodos.value = '0';
-            optTodos.textContent = 'Todos';
-            selectElement.appendChild(optTodos);
-            selectElement.value = '0';
-            selectElement.disabled = false;
-        }
-    }
-
-    async function poblarPeriodosDescansosMedicosDetalle(cia, payrolltype, selectElement) {
-        selectElement.innerHTML = '';
-        const loading = document.createElement('option');
-        loading.value = '';
-        loading.textContent = 'Cargando...';
-        selectElement.appendChild(loading);
-        try {
-            const res = await fetch(
-                `/api/selectores/periodos-asig?cia=${encodeURIComponent(cia)}&payrolltype=${encodeURIComponent(payrolltype)}`
-            );
-            const data = await res.json();
-            selectElement.innerHTML = '';
-            const optTodos = document.createElement('option');
-            optTodos.value = '0';
-            optTodos.textContent = 'Todos';
-            selectElement.appendChild(optTodos);
-            (Array.isArray(data) ? data : []).forEach((item) => {
-                const opt = document.createElement('option');
-                opt.value = item.id != null ? String(item.id) : '';
-                opt.textContent = item.text != null ? String(item.text) : '';
-                selectElement.appendChild(opt);
-            });
-            selectElement.value = '0';
-            selectElement.disabled = false;
-        } catch (err) {
-            console.error(err);
-            selectElement.innerHTML = '';
-            const optTodos = document.createElement('option');
-            optTodos.value = '0';
-            optTodos.textContent = 'Todos';
-            selectElement.appendChild(optTodos);
-            selectElement.value = '0';
-            selectElement.disabled = false;
-        }
-    }
-
     const DEFAULT_CIA = 'BGT';
     const cboCia = document.getElementById('cboCompania');
     const cboPlanilla = document.getElementById('cboTipoPlanilla');
     const cboTrabajador = document.getElementById('cboTrabajador');
-    const cboTipoDescanso = document.getElementById('cboTipoDescanso');
 
     await poblarSelect('/api/selectores/companias', cboCia);
     limpiarValorComboSiObsoleto(cboCia);
@@ -525,12 +495,17 @@ document.addEventListener('DOMContentLoaded', async function () {
     const guardadoObj = filtrosPersist ? filtrosPersist.leer() : null;
     const ciaGuardada = guardadoObj ? String(guardadoObj.cia || '').trim() : '';
     if (filtrosPersist && ciaGuardada) {
-        await filtrosPersist.aplicarRestauracionCascada({
-            poblarSelect,
-            poblarPeriodoVacaciones: poblarPeriodosDescansosMedicosDetalle,
-            poblarTiposDescansoMedico: poblarTiposDescansoMedicoDetalle
-        });
+        await filtrosPersist.aplicarRestauracionCascada({ poblarSelect });
         etiquetaTrabajadorTodosPorDefecto(cboTrabajador);
+        const fGuard = guardadoObj.fecha != null ? String(guardadoObj.fecha).trim() : '';
+        if (fGuard && /^\d{4}-\d{2}-\d{2}$/.test(fGuard)) {
+            document.getElementById('inpFechaCorte').value = fGuard;
+        }
+        const cCes = document.getElementById('cboCesadosSaldo');
+        if (cCes && guardadoObj.cesados != null) {
+            const cv = String(guardadoObj.cesados).trim().toUpperCase();
+            if (['T', 'Y', 'N'].includes(cv)) cCes.value = cv;
+        }
     }
 
     limpiarValorComboSiObsoleto(cboCia);
@@ -540,57 +515,33 @@ document.addEventListener('DOMContentLoaded', async function () {
             await poblarSelect(`/api/selectores/planillas?cia=${encodeURIComponent(ciaNorm)}`, cboPlanilla);
             await poblarSelect(`/api/selectores/trabajadores?cia=${encodeURIComponent(ciaNorm)}`, cboTrabajador);
             etiquetaTrabajadorTodosPorDefecto(cboTrabajador);
-            await poblarTiposDescansoMedicoDetalle(ciaNorm, cboTipoDescanso);
         }
     }
 
     {
         const cia = cboCia.value.trim();
         const pt = document.getElementById('cboTipoPlanilla').value.trim();
-        const period = document.getElementById('cboPeriodo').value.trim();
-        if (cia && pt && period) {
-            await ejecutarConsultaDescansosMedicos();
+        const date = document.getElementById('inpFechaCorte').value.trim();
+        if (cia && pt && date) {
+            await ejecutarConsultaSaldoVacaciones();
         }
     }
 
     document.getElementById('cboCompania').addEventListener('change', async function () {
         const cia = this.value;
-        const cboPlanilla = document.getElementById('cboTipoPlanilla');
-        const cboTrabajador = document.getElementById('cboTrabajador');
-
-        document.getElementById('cboPeriodo').innerHTML =
-            '<option value="">Seleccione tipo de planilla...</option>';
-        document.getElementById('cboPeriodo').disabled = true;
-
-        const cboDm = document.getElementById('cboTipoDescanso');
+        const cboPlanillaEl = document.getElementById('cboTipoPlanilla');
+        const cboTrabajadorEl = document.getElementById('cboTrabajador');
 
         if (cia) {
-            await poblarSelect(`/api/selectores/planillas?cia=${encodeURIComponent(cia)}`, cboPlanilla);
-            await poblarSelect(`/api/selectores/trabajadores?cia=${encodeURIComponent(cia)}`, cboTrabajador);
-            etiquetaTrabajadorTodosPorDefecto(cboTrabajador);
-            await poblarTiposDescansoMedicoDetalle(cia, cboDm);
+            await poblarSelect(`/api/selectores/planillas?cia=${encodeURIComponent(cia)}`, cboPlanillaEl);
+            await poblarSelect(`/api/selectores/trabajadores?cia=${encodeURIComponent(cia)}`, cboTrabajadorEl);
+            etiquetaTrabajadorTodosPorDefecto(cboTrabajadorEl);
         } else {
-            cboPlanilla.innerHTML = '<option value="">Seleccione...</option>';
-            cboPlanilla.disabled = true;
-            cboTrabajador.innerHTML = '<option value="">Seleccione...</option>';
-            cboTrabajador.disabled = true;
-            etiquetaTrabajadorTodosPorDefecto(cboTrabajador);
-            cboDm.innerHTML = '<option value="">Seleccione compañía...</option>';
-            cboDm.disabled = true;
-        }
-    });
-
-    document.getElementById('cboTipoPlanilla').addEventListener('change', async function () {
-        const cia = document.getElementById('cboCompania').value;
-        const pt = this.value;
-        const cboPeriodo = document.getElementById('cboPeriodo');
-
-        document.getElementById('cboPeriodo').innerHTML =
-            '<option value="">Seleccione tipo de planilla...</option>';
-        document.getElementById('cboPeriodo').disabled = true;
-
-        if (pt && cia) {
-            await poblarPeriodosDescansosMedicosDetalle(cia, pt, cboPeriodo);
+            cboPlanillaEl.innerHTML = '<option value="">Seleccione...</option>';
+            cboPlanillaEl.disabled = true;
+            cboTrabajadorEl.innerHTML = '<option value="">Seleccione...</option>';
+            cboTrabajadorEl.disabled = true;
+            etiquetaTrabajadorTodosPorDefecto(cboTrabajadorEl);
         }
     });
 
@@ -598,20 +549,20 @@ document.addEventListener('DOMContentLoaded', async function () {
         filtrosPersist.registrarGuardadoEnCambio();
     }
 
-    document.getElementById('frmDescansosMedicosDetalle').addEventListener('submit', async function (e) {
+    document.getElementById('frmSaldoVacaciones').addEventListener('submit', async function (e) {
         e.preventDefault();
-        await ejecutarConsultaDescansosMedicos();
+        await ejecutarConsultaSaldoVacaciones();
     });
 
-    document.getElementById('btnExportExcelDescMed').addEventListener('click', async function () {
-        if (!lastExportDescansosMedicos || !lastExportDescansosMedicos.headers || !lastExportDescansosMedicos.headers.length) {
+    document.getElementById('btnExportExcelSaldoVac').addEventListener('click', async function () {
+        if (!lastExportSaldoVacaciones || !lastExportSaldoVacaciones.headers || !lastExportSaldoVacaciones.headers.length) {
             alert('Ejecute primero una búsqueda con resultados.');
             return;
         }
         try {
-            await exportDescansosMedicosExcel(
-                { headers: lastExportDescansosMedicos.headers, data: lastExportDescansosMedicos.data },
-                lastExportDescansosMedicos.meta
+            await exportSaldoVacacionesExcel(
+                { headers: lastExportSaldoVacaciones.headers, data: lastExportSaldoVacaciones.data },
+                lastExportSaldoVacaciones.meta
             );
         } catch (err) {
             console.error(err);

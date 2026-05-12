@@ -8,6 +8,7 @@
     const STORAGE_KEY_PLANILLA_VERTICAL = 'filtros_planilla_vertical';
     const STORAGE_KEY_VACACIONES_DETALLE = 'filtros_vacaciones_detalle';
     const STORAGE_KEY_DESCANSOS_MEDICOS_DETALLE = 'filtros_descansos_medicos_detalle';
+    const STORAGE_KEY_SALDO_VACACIONES = 'filtros_saldo_vacaciones';
     const STORAGE_KEY_PROCESAR_PLANILLA = 'filtros_procesar_planilla';
 
     function val(id) {
@@ -304,6 +305,104 @@
         };
     }
 
+    function crearPersistenciaSaldoVacaciones() {
+        function guardar() {
+            try {
+                const estado = {
+                    cia: val('cboCompania'),
+                    payroll: val('cboTipoPlanilla'),
+                    fecha: val('inpFechaCorte'),
+                    cesados: val('cboCesadosSaldo'),
+                    person: val('cboTrabajador'),
+                    timestamp: Date.now()
+                };
+                localStorage.setItem(STORAGE_KEY_SALDO_VACACIONES, JSON.stringify(estado));
+            } catch (e) {
+                console.warn('filtros saldo vacaciones: no se pudo guardar', e);
+            }
+        }
+
+        function leer() {
+            try {
+                const raw = localStorage.getItem(STORAGE_KEY_SALDO_VACACIONES);
+                if (!raw) return null;
+                const o = JSON.parse(raw);
+                if (!o || typeof o !== 'object') return null;
+                return o;
+            } catch (e) {
+                return null;
+            }
+        }
+
+        async function aplicarRestauracionCascada(opts) {
+            if (!opts || typeof opts.poblarSelect !== 'function') return false;
+
+            const { poblarSelect } = opts;
+            const filtros = leer();
+            if (!filtros || !filtros.cia) return false;
+
+            const cboCia = document.getElementById('cboCompania');
+            const cboPt = document.getElementById('cboTipoPlanilla');
+            const cboTra = document.getElementById('cboTrabajador');
+            const inpFecha = document.getElementById('inpFechaCorte');
+            if (!cboCia || !cboPt) return false;
+
+            const cia = String(filtros.cia).trim();
+            if (!optionExists(cboCia, cia)) return false;
+            cboCia.value = cia;
+
+            await poblarSelect(`/api/selectores/planillas?cia=${encodeURIComponent(cia)}`, cboPt);
+
+            const payroll = filtros.payroll != null ? String(filtros.payroll).trim() : '';
+            if (!payroll || !optionExists(cboPt, payroll)) {
+                guardar();
+                return true;
+            }
+            cboPt.value = payroll;
+
+            if (cboTra) {
+                await poblarSelect(`/api/selectores/trabajadores?cia=${encodeURIComponent(cia)}`, cboTra);
+                const person = filtros.person != null ? String(filtros.person).trim() : '';
+                if (person && optionExists(cboTra, person)) {
+                    cboTra.value = person;
+                }
+            }
+
+            if (inpFecha && filtros.fecha != null) {
+                const f = String(filtros.fecha).trim();
+                if (/^\d{4}-\d{2}-\d{2}$/.test(f)) {
+                    inpFecha.value = f;
+                }
+            }
+
+            const cCes = document.getElementById('cboCesadosSaldo');
+            if (cCes && filtros.cesados != null) {
+                const cv = String(filtros.cesados).trim().toUpperCase();
+                if (['T', 'Y', 'N'].includes(cv)) {
+                    cCes.value = cv;
+                }
+            }
+
+            guardar();
+            return true;
+        }
+
+        function registrarGuardadoEnCambio() {
+            ['cboCompania', 'cboTipoPlanilla', 'cboTrabajador', 'inpFechaCorte', 'cboCesadosSaldo'].forEach((id) => {
+                const el = document.getElementById(id);
+                if (el) el.addEventListener('change', guardar);
+            });
+        }
+
+        return {
+            STORAGE_KEY: STORAGE_KEY_SALDO_VACACIONES,
+            guardar,
+            leer,
+            aplicarRestauracionCascada,
+            registrarGuardadoEnCambio
+        };
+    }
+
     function crearPersistenciaDescansosMedicosDetalle() {
         function guardar() {
             try {
@@ -419,6 +518,7 @@
         STORAGE_KEY_PROMEDIO_LIQ,
         STORAGE_KEY_PLANILLA_VERTICAL,
         STORAGE_KEY_VACACIONES_DETALLE,
+        STORAGE_KEY_SALDO_VACACIONES,
         STORAGE_KEY_DESCANSOS_MEDICOS_DETALLE,
         STORAGE_KEY_PROCESAR_PLANILLA,
         /** Misma lógica que optionExists interno (valor y option.value con trim). */
@@ -434,6 +534,9 @@
         },
         vacacionesDetalle: function () {
             return crearPersistenciaVacacionesDetalle();
+        },
+        saldoVacaciones: function () {
+            return crearPersistenciaSaldoVacaciones();
         },
         descansosMedicosDetalle: function () {
             return crearPersistenciaDescansosMedicosDetalle();

@@ -1,0 +1,33 @@
+{% extends "layout.html" %}
+
+{% block title %}Cargar documentos{% endblock %}
+
+{% block content %}
+<div class="card shadow-sm border-0">
+    <div class="card-header bg-white border-bottom py-3">
+        <h3 class="card-title mb-0 fw-bold text-secondary">
+            <i class="bi bi-cloud-upload me-2"></i>Procesar documentos del servidor
+        </h3>
+    </div>
+    <div class="card-body">
+        <p class="text-muted mb-3">
+            Esta acción escaneará la carpeta del servidor donde corre la aplicación Flask
+            (no el navegador del usuario) y registrará los PDF en la base de datos.
+        </p>
+        <p class="mb-4">
+            Ruta configurada: <code class="user-select-all">{{ ruta_servidor }}</code>
+            <br>
+            <small class="text-muted">Puede sobrescribirse con la variable de entorno <code>DOCUMENTOS_MINERIA_PATH</code>.</small>
+        </p>
+        <p class="small text-muted mb-4">
+            Formato esperado del nombre: <code>Tipo_Periodo_DNI_Nombre empleado.pdf</code>
+            (separado por guiones bajos; el nombre puede incluir espacios si no hay más guiones bajos).
+        </p>
+        <form action="{{ url_for('procesar_carga_servidor') }}" method="post">
+            <button type="submit" class="btn btn-primary">
+                <i class="bi bi-cpu me-1"></i> Iniciar escaneo de carpeta
+            </button>
+        </form>
+    </div>
+</div>
+{% endblock %}

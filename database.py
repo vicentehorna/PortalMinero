@@ -90,6 +90,61 @@ def get_db_connection():
     return DatabaseConfig.get_connection()
 
 
+def insertar_documento_minero(datos):
+    """
+    Inserta un registro en DocumentosMineria si NombreArchivo aún no existe.
+
+    Args:
+        datos: dict con claves tipo, periodo, dni, nombre, archivo_original
+
+    Returns:
+        True si se insertó una fila nueva, False si ya existía (duplicado) o error.
+    """
+    conn = None
+    try:
+        archivo = (datos.get("archivo_original") or "").strip()
+        if not archivo:
+            return False
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        query = """
+        INSERT INTO dbo.DocumentosMineria (Tipo, Periodo, DNI, NombreEmpleado, NombreArchivo)
+        SELECT ?, ?, ?, ?, ?
+        WHERE NOT EXISTS (
+            SELECT 1 FROM dbo.DocumentosMineria WHERE NombreArchivo = ?
+        )
+        """
+        cursor.execute(
+            query,
+            (
+                (datos.get("tipo") or "").strip(),
+                (datos.get("periodo") or "").strip(),
+                (datos.get("dni") or "").strip(),
+                (datos.get("nombre") or "").strip(),
+                archivo,
+                archivo,
+            ),
+        )
+        inserted = cursor.rowcount > 0
+        conn.commit()
+        cursor.close()
+        return inserted
+    except Exception as e:
+        print(f"Error en insertar_documento_minero: {e}")
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        return False
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 def get_config_empresa(company_id):
     """
     Obtiene nombres de archivo de logo/firma para la compañía.
@@ -118,106 +173,144 @@ def get_config_empresa(company_id):
 
 class User(UserMixin):
     """Clase de usuario para Flask-Login"""
-    
+
+    _SQL_LOGIN_GENERAL = """
+        SELECT
+            u.UserID,
+            p.Name,
+            p.email,
+            'Autónomo'
+        FROM SY_User u
+        INNER JOIN SY_Person p ON p.UserID = u.UserID
+        INNER JOIN SY_Company c ON (p.Company = c.Company)
+        INNER JOIN SY_UserProfile up ON up.UserID = u.UserID
+        INNER JOIN PR_mapping2 M ON (c.Company = M.company)
+        WHERE u.UserID = ? AND u.PasswordWeb = ?
+        """
+
+    _SQL_LOGIN_EMPLEADO = """
+        SELECT
+            u.UserID,
+            p.Name,
+            p.email,
+            'Autónomo'
+        FROM SY_User u
+        INNER JOIN SY_Person p ON p.UserID = u.UserID
+        INNER JOIN PR_Employee E ON (p.Person = E.Person AND E.Status = 'N')
+        INNER JOIN SY_Company c ON (E.Company = c.Company)
+        INNER JOIN SY_UserProfile up ON up.UserID = u.UserID
+        INNER JOIN PR_mapping2 M ON (c.Company = M.company)
+        WHERE u.UserID = ? AND u.PasswordWeb = ?
+        """
+
+    _SQL_USER_BY_ID_GENERAL = """
+        SELECT
+            u.UserID,
+            p.Name,
+            p.email,
+            'Autónomo'
+        FROM SY_User u
+        INNER JOIN SY_Person p ON p.UserID = u.UserID
+        INNER JOIN SY_Company c ON (p.Company = c.Company)
+        INNER JOIN SY_UserProfile up ON up.UserID = u.UserID
+        INNER JOIN PR_mapping2 M ON (c.Company = M.company)
+        WHERE u.UserID = ?
+        """
+
+    _SQL_USER_BY_ID_EMPLEADO = """
+        SELECT
+            u.UserID,
+            p.Name,
+            p.email,
+            'Autónomo'
+        FROM SY_User u
+        INNER JOIN SY_Person p ON p.UserID = u.UserID
+        INNER JOIN PR_Employee E ON (p.Person = E.Person AND E.Status = 'N')
+        INNER JOIN SY_Company c ON (E.Company = c.Company)
+        INNER JOIN SY_UserProfile up ON up.UserID = u.UserID
+        INNER JOIN PR_mapping2 M ON (c.Company = M.company)
+        WHERE u.UserID = ?
+        """
+
     def __init__(self, user_id, username, email=None, nombre=None):
         self.id = user_id
         self.username = username
         self.email = email
         self.nombre = nombre
-    
+
+    @staticmethod
+    def _tiene_perfil_general(cursor, userid):
+        """True si el usuario tiene perfil GENERAL (acceso portal sin empleado activo)."""
+        cursor.execute(
+            """
+            SELECT 1
+            FROM SY_User u
+            INNER JOIN SY_UserProfile up ON u.UserID = up.UserID
+                AND up.Profile = 'GENERAL'
+            WHERE u.UserID = ?
+            """,
+            (userid,),
+        )
+        return cursor.fetchone() is not None
+
     @staticmethod
     def validate_user(username, password):
         """
-        Valida las credenciales del usuario contra la base de datos
-        
-        Args:
-            username: Nombre de usuario
-            password: Contraseña del usuario
-            
-        Returns:
-            User object si las credenciales son válidas, None en caso contrario
+        Valida las credenciales del usuario contra la base de datos.
+
+        Si existe fila en SY_User + SY_UserProfile con Profile = 'GENERAL' para el UserID,
+        se valida con la consulta sin PR_Employee; en caso contrario se usa la consulta
+        original (empleado activo Status = 'N').
         """
         try:
             conn = DatabaseConfig.get_connection()
             cursor = conn.cursor()
-            
-            # Query para validar usuario y contraseña
-            # Ajusta el nombre de la tabla y columnas según tu esquema
-            query = """
-                SELECT 
-                u.UserID,
-                p.Name,
-                p.email,
-                'Autónomo'
-            FROM SY_User u
-            INNER JOIN SY_Person p ON p.UserID = u.UserID 
-            INNER JOIN PR_Employee E on (p.Person = e.Person and e.Status = 'N')
-            INNER JOIN SY_Company c ON (E.Company = c.Company)
-            INNER JOIN SY_UserProfile up ON up.UserID = u.UserID
-            INNER JOIN PR_mapping2 M on (c.Company = M.company)
-            WHERE u.UserID = ? AND u.PasswordWeb = ?
-            """
-            
-            cursor.execute(query, (username, password))
+
+            print(f"DEBUG: Intentando login con usuario: '{username}'")
+
+            if User._tiene_perfil_general(cursor, username):
+                cursor.execute(User._SQL_LOGIN_GENERAL, (username, password))
+            else:
+                cursor.execute(User._SQL_LOGIN_EMPLEADO, (username, password))
+
             row = cursor.fetchone()
-            
             cursor.close()
             conn.close()
 
-            print(f"DEBUG: Intentando login con usuario: '{username}'")
-            
             if row:
                 user_id, username_db, email, nombre = row
                 return User(user_id, username_db, email, nombre)
-            
+
             return None
-            
+
         except Exception as e:
             print(f"Error al validar usuario: {e}")
             return None
-    
+
     @staticmethod
     def get_user_by_id(user_id):
         """
-        Obtiene un usuario por su ID
-        
-        Args:
-            user_id: ID del usuario
-            
-        Returns:
-            User object si existe, None en caso contrario
+        Obtiene un usuario por su ID (misma regla GENERAL vs empleado que validate_user).
         """
         try:
             conn = DatabaseConfig.get_connection()
             cursor = conn.cursor()
-            
-            query = """
-              SELECT 
-                u.UserID,
-                p.Name,
-                p.email,
-                'Autónomo'
-            FROM SY_User u
-            INNER JOIN SY_Person p ON p.UserID = u.UserID 
-            INNER JOIN PR_Employee E on (p.Person = e.Person and e.Status = 'N')
-            INNER JOIN SY_Company c ON (E.Company = c.Company)
-            INNER JOIN SY_UserProfile up ON up.UserID = u.UserID
-            INNER JOIN PR_mapping2 M on (c.Company = M.company)
-            WHERE u.UserID = ?  
-            """
-            
-            cursor.execute(query, (user_id,))
+
+            if User._tiene_perfil_general(cursor, user_id):
+                cursor.execute(User._SQL_USER_BY_ID_GENERAL, (user_id,))
+            else:
+                cursor.execute(User._SQL_USER_BY_ID_EMPLEADO, (user_id,))
+
             row = cursor.fetchone()
-            
             cursor.close()
             conn.close()
-            
+
             if row:
                 user_id_db, username, email, nombre = row
                 return User(user_id_db, username, email, nombre)
-            
+
             return None
-            
+
         except Exception as e:
             print(f"Error al obtener usuario: {e}")
             return None

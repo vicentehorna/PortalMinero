@@ -37,7 +37,15 @@ except Exception as _weasy_err:
     WEASYPRINT_AVAILABLE = False
     _WEASYPRINT_IMPORT_ERROR = _weasy_err
 
-from database import User, get_datos_usuario_web, cambiar_password, get_db_connection, get_config_empresa, get_listado_generar_boletas
+from database import (
+    User,
+    get_datos_usuario_web,
+    cambiar_password,
+    get_db_connection,
+    get_config_empresa,
+    get_listado_generar_boletas,
+    insertar_documento_minero,
+)
 
 load_dotenv()
 app = Flask(__name__)
@@ -194,6 +202,30 @@ def _dicts_first_nonempty_resultset(cursor):
         if not cursor.nextset():
             break
     return []
+
+
+def _dicts_last_nonempty_resultset(cursor):
+    """
+    Como _dicts_first_nonempty_resultset pero devuelve el último result set con filas.
+    Útil cuando un SP ejecuta DML y luego un SELECT final.
+    """
+    last_out = []
+    while True:
+        if cursor.description:
+            cols = [str(c[0]).strip() for c in cursor.description]
+            rows = cursor.fetchall()
+            if rows:
+                out = []
+                for row in rows:
+                    rd = {}
+                    for i, cname in enumerate(cols):
+                        key = (cname or f"col{i}").lower()
+                        rd[key] = row[i]
+                    out.append(rd)
+                last_out = out
+        if not cursor.nextset():
+            break
+    return last_out
 
 
 def _sanitize_dynamic_procedure_name(name):
@@ -565,6 +597,62 @@ def dashboard():
     return render_template('dashboard.html')
 
 
+DOCUMENTOS_MINERIA_PATH = os.getenv(
+    'DOCUMENTOS_MINERIA_PATH',
+    r'C:\HM\ADRIAN\DOCUMENTOS',
+)
+
+
+@app.route('/carga-documentos')
+@login_required
+def carga_documentos():
+    return render_template('carga_documentos.html', ruta_servidor=DOCUMENTOS_MINERIA_PATH)
+
+
+@app.route('/procesar-carga-servidor', methods=['POST'])
+@login_required
+def procesar_carga_servidor():
+    ruta_servidor = DOCUMENTOS_MINERIA_PATH
+    try:
+        if not os.path.isdir(ruta_servidor):
+            flash(f'La carpeta no existe o no es accesible: {ruta_servidor}', 'error')
+            return redirect(url_for('carga_documentos'))
+
+        archivos = [f for f in os.listdir(ruta_servidor) if f.lower().endswith('.pdf')]
+        nuevos = 0
+        omitidos_formato = 0
+
+        for nombre_archivo in archivos:
+            base = nombre_archivo[:-4] if nombre_archivo.lower().endswith('.pdf') else nombre_archivo
+            partes = base.split('_')
+            if len(partes) < 4:
+                omitidos_formato += 1
+                continue
+            datos = {
+                'tipo': partes[0],
+                'periodo': partes[1],
+                'dni': partes[2],
+                'nombre': ' '.join(partes[3:]).strip(),
+                'archivo_original': nombre_archivo,
+            }
+            if insertar_documento_minero(datos):
+                nuevos += 1
+
+        flash(
+            f'Proceso finalizado. Archivos PDF encontrados: {len(archivos)}. '
+            f'Registros nuevos insertados: {nuevos}. '
+            f'Omitidos por nombre con menos de 4 segmentos: {omitidos_formato}.',
+            'success',
+        )
+    except OSError as e:
+        flash(f'Error al acceder a la ruta del servidor: {e}', 'error')
+    except Exception as e:
+        logging.exception('procesar_carga_servidor')
+        flash(f'Error al procesar la carga: {e}', 'error')
+
+    return redirect(url_for('carga_documentos'))
+
+
 @app.route('/reporte-liquidaciones')
 @login_required
 def reporte_liquidaciones():
@@ -582,6 +670,12 @@ def reporte_planilla_vertical_page():
 @login_required
 def reporte_vacaciones_detalle_page():
     return render_template('reporte_vacaciones_detalle.html')
+
+
+@app.route('/reporte-saldo-vacaciones')
+@login_required
+def reporte_saldo_vacaciones_page():
+    return render_template('reporte_saldo_vacaciones.html')
 
 
 @app.route('/reporte-descansos-medicos-detalle')
@@ -1551,6 +1645,106 @@ def reporte_vacaciones_detalle_post():
         return jsonify({"headers": headers_es, "data": resultado})
     except Exception as e:
         logging.exception("reporte_vacaciones_detalle_post")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def _parse_fecha_reporte_saldo(raw):
+    """Fecha de corte para sp_pr_reportesaldos_total_web (por defecto hoy)."""
+    if raw is None or str(raw).strip() == '':
+        return datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    s = str(raw).strip()
+    if 'T' in s:
+        s = s.split('T')[0]
+    s = s.replace('/', '-')[:10]
+    try:
+        return datetime.strptime(s[:10], '%Y-%m-%d')
+    except ValueError:
+        try:
+            return datetime.strptime(s[:10], '%d/%m/%Y')
+        except ValueError:
+            return datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+@app.route('/reporte_saldo_vacaciones', methods=['POST'])
+@login_required
+def reporte_saldo_vacaciones_post():
+    """sp_pr_reportesaldos_total_web @company, @payrolltype, @person, @date, @cesados."""
+    body = request.get_json(silent=True) or {}
+    cia = str(body.get('cia') or '').strip()
+    payroll_type = str(body.get('payroll_type') or body.get('payrolltype') or '').strip()
+    person = str(body.get('person') or '0').strip() or '0'
+    fecha_corte = _parse_fecha_reporte_saldo(body.get('date') or body.get('fecha'))
+    cesados_raw = str(body.get('cesados') or body.get('cesados_saldo') or 'T').strip().upper()
+    cesados = cesados_raw if cesados_raw in ('T', 'Y', 'N') else 'T'
+
+    if not cia:
+        return jsonify({"error": "Seleccione una compañía."}), 400
+    if not payroll_type:
+        return jsonify({"error": "Debe indicar tipo de planilla."}), 400
+
+    headers_es = [
+        'Código',
+        'Nombre',
+        'Fecha ingreso',
+        'Fecha cese',
+        'Año control',
+        'Fecha inicio',
+        'Fecha fin',
+        'Tomados',
+        'Pendientes',
+        'Vencidos',
+        'Truncos',
+    ]
+    keys_datos = [
+        'codigo',
+        'nombre',
+        'fechaingreso',
+        'fechacese',
+        'controlyear',
+        'fechainicio',
+        'fechafin',
+        'tomados',
+        'pendientes',
+        'vencidos',
+        'truncos',
+    ]
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "EXEC sp_pr_reportesaldos_total_web @company=?, @payrolltype=?, @person=?, @date=?, @cesados=?",
+            (cia, payroll_type, person, fecha_corte, cesados),
+        )
+        rows = _dicts_last_nonempty_resultset(cursor)
+        resultado = []
+        for r in rows:
+            fila = []
+            for key in keys_datos:
+                val = r.get(key)
+                if key == 'tomados' and val is not None:
+                    try:
+                        fila.append(int(round(float(val))))
+                    except Exception:
+                        fila.append(_jsonable_value(val))
+                elif key in ('pendientes', 'vencidos') and val is not None:
+                    try:
+                        fila.append(float(val))
+                    except Exception:
+                        fila.append(_jsonable_value(val))
+                else:
+                    fila.append(_jsonable_value(val))
+            resultado.append(fila)
+        return jsonify({"headers": headers_es, "data": resultado})
+    except Exception as e:
+        logging.exception("reporte_saldo_vacaciones_post")
         return jsonify({"error": str(e)}), 500
     finally:
         if conn:
