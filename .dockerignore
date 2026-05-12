@@ -2,4 +2,10 @@ __pycache__
 *.pyc
 .git
 .env
+.env.*
 venv
+.venv
+.pytest_cache
+.coverage
+htmlcov
+apikey.txt

@@ -32,5 +32,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 4. Copiar el resto del proyecto
 COPY . .
 
-# 5. Comando para ejecutar la app
-CMD ["gunicorn", "--bind", "0.0.0.0:10000", "--timeout", "120", "app:app"]
+# Render (y otros PaaS) inyectan PORT; en local Docker puede no existir → 10000
+ENV PORT=10000
+EXPOSE 10000
+
+# 5. Comando para ejecutar la app (shell para expandir $PORT)
+CMD ["/bin/sh", "-c", "exec gunicorn --bind 0.0.0.0:${PORT} --workers ${WEB_CONCURRENCY:-1} --timeout 120 app:app"]

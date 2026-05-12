@@ -1,0 +1,18 @@
+# Blueprint Render: https://render.com/docs/blueprint-spec
+# Tras el primer deploy, configura en el panel las variables sensibles (.env):
+# SQL_SERVER, SQL_DATABASE, SQL_USER, SQL_PASSWORD, FLASK_SECRET_KEY, etc.
+
+services:
+  - type: web
+    name: portal-minero
+    runtime: docker
+    region: oregon
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: WEB_CONCURRENCY
+        value: "1"
