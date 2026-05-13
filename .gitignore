@@ -40,10 +40,9 @@ Thumbs.db
 # Flask
 instance/
 .webassets-cache
-_ _ p y c a c h e _ _ / 
- 
- . v e n v / 
- 
- . e n v 
- 
+
+# Credenciales Google (service account); no versionar
+google_keys.json
+portal-minero-*.json
+
  

@@ -145,6 +145,252 @@ def insertar_documento_minero(datos):
                 pass
 
 
+_MERGE_SQL_DOCUMENTOS_BOLETAS = """
+MERGE dbo.DocumentosBoletas AS tgt
+USING (
+    SELECT
+        ? AS DNI,
+        ? AS Periodo,
+        ? AS TipoDocumento,
+        ? AS NombreTrabajador,
+        ? AS NombreArchivoOriginal,
+        ? AS DriveFileID
+) AS src
+ON (
+    tgt.DNI = src.DNI
+    AND tgt.Periodo = src.Periodo
+    AND ISNULL(tgt.TipoDocumento, '') = ISNULL(src.TipoDocumento, '')
+)
+WHEN MATCHED THEN
+    UPDATE SET
+        tgt.NombreTrabajador = src.NombreTrabajador,
+        tgt.NombreArchivoOriginal = src.NombreArchivoOriginal,
+        tgt.DriveFileID = src.DriveFileID,
+        tgt.FechaSincronizacion = GETDATE()
+WHEN NOT MATCHED THEN
+    INSERT (
+        DNI, Periodo, TipoDocumento, NombreTrabajador,
+        NombreArchivoOriginal, DriveFileID, FechaSincronizacion
+    )
+    VALUES (
+        src.DNI, src.Periodo, src.TipoDocumento, src.NombreTrabajador,
+        src.NombreArchivoOriginal, src.DriveFileID, GETDATE()
+    );
+"""
+
+
+def _stats_metadata_drive_vacio():
+    return {"procesados": 0, "omitidos_formato": 0, "sin_id": 0, "ok": 0}
+
+
+def _acumular_stats_metadata_drive(total, delta):
+    for k in total:
+        total[k] += delta.get(k, 0)
+
+
+def procesar_un_item_metadata_drive(cursor, item):
+    """
+    Un archivo de Drive contra DocumentosBoletas (un MERGE).
+    Retorna deltas {procesados, omitidos_formato, sin_id, ok} (0/1 en cada clave relevante).
+    """
+    delta = _stats_metadata_drive_vacio()
+    delta["procesados"] = 1
+
+    nombre_archivo = str((item or {}).get("name") or "").strip()
+    drive_id = str((item or {}).get("id") or "").strip()
+
+    if not drive_id:
+        delta["sin_id"] = 1
+        return delta
+
+    base = nombre_archivo[:-4] if nombre_archivo.lower().endswith(".pdf") else nombre_archivo
+    base = base.strip()
+    # TIPO_PERIODO_DNI_Nombre → al menos 3 guiones bajos (4 segmentos mínimo)
+    if base.count("_") < 3:
+        delta["omitidos_formato"] = 1
+        return delta
+
+    partes = base.split("_")
+    if len(partes) < 4:
+        delta["omitidos_formato"] = 1
+        return delta
+
+    tipo = str(partes[0]).strip()
+    periodo = str(partes[1]).strip()
+    dni = str(partes[2]).strip()
+    nombre_trabajador = " ".join(str(p).strip() for p in partes[3:] if str(p).strip()).strip()
+
+    if not (tipo and periodo and dni):
+        delta["omitidos_formato"] = 1
+        return delta
+
+    cursor.execute(
+        _MERGE_SQL_DOCUMENTOS_BOLETAS,
+        (dni, periodo, tipo, nombre_trabajador, nombre_archivo, drive_id),
+    )
+    delta["ok"] = 1
+    return delta
+
+
+def sincronizar_metadata_drive(lista_archivos):
+    """
+    Sincroniza metadata de archivos PDF de Google Drive contra dbo.DocumentosBoletas.
+
+    Reglas:
+    - Nombre esperado: TIPO_PERIODO_DNI_Nombre.pdf (al menos 3 guiones bajos en el nombre base)
+    - Clave de negocio: (DNI, Periodo, TipoDocumento)
+    - Si existe: actualiza DriveFileID / Nombre / NombreArchivoOriginal / FechaSincronizacion
+    - Si no existe: inserta registro nuevo.
+
+    Args:
+        lista_archivos: iterable de dicts con al menos {'name': str, 'id': str}
+
+    Returns:
+        dict con contadores: {procesados, omitidos_formato, sin_id, ok}
+    """
+    conn = None
+    stats = _stats_metadata_drive_vacio()
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        for item in (lista_archivos or []):
+            d = procesar_un_item_metadata_drive(cursor, item)
+            _acumular_stats_metadata_drive(stats, d)
+
+        conn.commit()
+        cursor.close()
+        return stats
+    except Exception as e:
+        print(f"Error en sincronizar_metadata_drive: {e}")
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        return stats
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def sincronizar_metadata_drive_lote(cursor, lista_archivos, stats_acumulado=None):
+    """
+    Procesa un subconjunto de archivos usando un cursor ya abierto (sin commit).
+    Actualiza stats_acumulado si se pasa un dict mutable.
+    """
+    stats = _stats_metadata_drive_vacio()
+    for item in (lista_archivos or []):
+        d = procesar_un_item_metadata_drive(cursor, item)
+        _acumular_stats_metadata_drive(stats, d)
+        if stats_acumulado is not None:
+            _acumular_stats_metadata_drive(stats_acumulado, d)
+    return stats
+
+
+def ejecutar_sp_updatecompany_documentos_boletas():
+    """
+    Ejecuta sp_pr_updatecompany para actualizar la columna company de DocumentosBoletas.
+
+    Returns:
+        (True, mensaje) si ejecuta OK, (False, mensaje_error) si falla.
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("EXEC sp_pr_updatecompany")
+        conn.commit()
+        cursor.close()
+        return True, "Company actualizado en DocumentosBoletas."
+    except Exception as e:
+        print(f"Error en ejecutar_sp_updatecompany_documentos_boletas: {e}")
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        return False, f"No se pudo ejecutar sp_pr_updatecompany: {e}"
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def get_ruta_documentos_usuario(user_id):
+    """
+    Ruta de carpeta de documentos (PDF) configurada en SY_User.RutaDocumentos.
+    Retorna string sin espacios extremos, o None si no hay valor.
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT RutaDocumentos FROM SY_User WHERE UserID = ?",
+            (user_id,),
+        )
+        row = cursor.fetchone()
+        cursor.close()
+        if not row or row[0] is None:
+            return None
+        ruta = str(row[0]).strip()
+        return ruta if ruta else None
+    except Exception as e:
+        print(f"Error en get_ruta_documentos_usuario: {e}")
+        return None
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def update_ruta_documentos_usuario(user_id, ruta):
+    """
+    Actualiza SY_User.RutaDocumentos. Cadena vacía guarda NULL (se usa ruta por defecto del sistema).
+
+    Returns:
+        (True, mensaje) o (False, mensaje_error)
+    """
+    conn = None
+    try:
+        ruta_limpia = (ruta or "").strip()
+        valor_sql = ruta_limpia if ruta_limpia else None
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE SY_User SET RutaDocumentos = ? WHERE UserID = ?",
+            (valor_sql, user_id),
+        )
+        if cursor.rowcount < 1:
+            cursor.close()
+            return False, "No se encontró el usuario o no hubo cambios."
+        conn.commit()
+        cursor.close()
+        return True, "Ruta de documentos guardada correctamente."
+    except Exception as e:
+        print(f"Error en update_ruta_documentos_usuario: {e}")
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        return False, f"Error al guardar: {e}"
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 def get_config_empresa(company_id):
     """
     Obtiene nombres de archivo de logo/firma para la compañía.
@@ -679,6 +925,44 @@ def actualizar_descarga(company, person, tipodocumento, prperiod):
     except Exception as e:
         print(f"Error en actualizar_descarga: {e}")
         return False
+
+
+def actualizar_fechadescarga_boleta(company, person, tipodocumento, period):
+    """
+    Actualiza FechaDescarga en DocumentosBoletas para el documento descargado.
+    """
+    conn = None
+    try:
+        conn = DatabaseConfig.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE DocumentosBoletas
+            SET FechaDescarga = GETDATE()
+            WHERE Company = ?
+              AND DNI = ?
+              AND TipoDocumento = ?
+              AND LEFT(Periodo, 6) = LEFT(?, 6)
+            """,
+            (company, person, tipodocumento, period),
+        )
+        conn.commit()
+        cursor.close()
+        return True
+    except Exception as e:
+        print(f"Error en actualizar_fechadescarga_boleta: {e}")
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        return False
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def registrar_comprobante_web(company, payrolltype, processtype, period, person, userid, filename, tipo='BOL'):

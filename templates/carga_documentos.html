@@ -11,23 +11,205 @@
     </div>
     <div class="card-body">
         <p class="text-muted mb-3">
-            Esta acción escaneará la carpeta del servidor donde corre la aplicación Flask
-            (no el navegador del usuario) y registrará los PDF en la base de datos.
+            Esta acción leerá los PDF de una carpeta de Google Drive y sincronizará su metadata
+            en la base de datos.
         </p>
-        <p class="mb-4">
-            Ruta configurada: <code class="user-select-all">{{ ruta_servidor }}</code>
-            <br>
-            <small class="text-muted">Puede sobrescribirse con la variable de entorno <code>DOCUMENTOS_MINERIA_PATH</code>.</small>
+        <p class="mb-2">
+            <strong>ID de carpeta de Google Drive configurado:</strong>
+            {% if ruta_servidor %}
+            <code class="user-select-all d-block mt-1">{{ ruta_servidor }}</code>
+            {% else %}
+            <span class="d-block mt-1 text-warning fw-semibold">Sin carpeta configurada.</span>
+            {% endif %}
+        </p>
+        <p class="small text-muted mb-4">
+            La ruta se toma de <a href="{{ url_for('configuracion_usuario') }}">Configuración por usuario</a>.
+            {% if not ruta_servidor %}
+            Debe guardar allí un ID de carpeta de Google Drive válido antes de sincronizar.
+            {% endif %}
         </p>
         <p class="small text-muted mb-4">
             Formato esperado del nombre: <code>Tipo_Periodo_DNI_Nombre empleado.pdf</code>
             (separado por guiones bajos; el nombre puede incluir espacios si no hay más guiones bajos).
         </p>
-        <form action="{{ url_for('procesar_carga_servidor') }}" method="post">
-            <button type="submit" class="btn btn-primary">
-                <i class="bi bi-cpu me-1"></i> Iniciar escaneo de carpeta
-            </button>
-        </form>
+        <details class="small border rounded px-3 py-2 mb-4 bg-light">
+            <summary class="fw-semibold text-secondary cursor-pointer">Si falla la conexión con Google (timeout o error de red)</summary>
+            <ul class="mb-0 mt-2 ps-3 text-muted">
+                <li><strong>Antivirus de terceros</strong> (Avast, AVG, McAfee, Kaspersky, etc.): suelen inspeccionar o bloquear el tráfico HTTPS de <code>python.exe</code>. Solución habitual: añadir <strong>excepción</strong> para el ejecutable de Python que usa el portal, o permitir conexiones salientes a <code>*.googleapis.com</code> y <code>oauth2.googleapis.com</code>, sin desactivar todo el antivirus.</li>
+                <li><strong>Firewall de Windows</strong>: permita la aplicación Python (o el servicio que hospeda Flask) en redes privadas/de trabajo si aplica.</li>
+                <li><strong>Oficina con proxy</strong>: el administrador debe configurar el proxy en el servidor (variables de entorno <code>HTTPS_PROXY</code> / <code>HTTP_PROXY</code>) para que Python pueda salir a Internet.</li>
+                <li>El bloqueo ocurre en la <strong>máquina donde corre la aplicación</strong> (servidor o su PC si ejecuta Flask ahí), no solo en el navegador.</li>
+            </ul>
+        </details>
+        <div id="syncProgressArea" class="d-none mb-4">
+            <div class="d-flex justify-content-between align-items-center small text-muted mb-1">
+                <span id="syncProgressLabel">Preparando…</span>
+                <span id="syncProgressFraction" class="fw-semibold text-secondary"></span>
+            </div>
+            <div class="progress" style="height: 12px;">
+                <div
+                    id="syncProgressBar"
+                    class="progress-bar progress-bar-striped progress-bar-animated bg-primary"
+                    role="progressbar"
+                    style="width: 0%"
+                    aria-valuenow="0"
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                ></div>
+            </div>
+        </div>
+        <div id="syncResultAlert" class="alert d-none mb-3" role="alert"></div>
+        <button
+            type="button"
+            id="btnSyncDrive"
+            class="btn btn-primary"
+            data-sync-url="{{ url_for('api_carga_documentos_sincronizar') }}"
+            {% if not ruta_servidor %}disabled title="Configure la ruta primero"{% endif %}
+        >
+            <i class="bi bi-cloud-download me-1"></i> Sincronizar desde Google Drive
+        </button>
+        <p class="small text-muted mt-3 mb-0">
+            El avance se muestra mientras se procesan los archivos (por lotes en base de datos).
+        </p>
     </div>
 </div>
+<script>
+(function () {
+    const btn = document.getElementById('btnSyncDrive');
+    const area = document.getElementById('syncProgressArea');
+    const bar = document.getElementById('syncProgressBar');
+    const label = document.getElementById('syncProgressLabel');
+    const fraction = document.getElementById('syncProgressFraction');
+    const alertBox = document.getElementById('syncResultAlert');
+    if (!btn || !btn.dataset.syncUrl) return;
+
+    function setAlert(kind, html) {
+        alertBox.className = 'alert mb-3 ' + (kind === 'success' ? 'alert-success' : kind === 'danger' ? 'alert-danger' : 'alert-info');
+        alertBox.innerHTML = html;
+        alertBox.classList.remove('d-none');
+    }
+
+    function hideAlert() {
+        alertBox.classList.add('d-none');
+        alertBox.innerHTML = '';
+    }
+
+    function setProgress(current, total) {
+        if (total <= 0) {
+            bar.style.width = '0%';
+            bar.setAttribute('aria-valuenow', '0');
+            fraction.textContent = '0 documentos';
+            label.textContent = 'No hay PDF en la carpeta.';
+            return;
+        }
+        const pct = Math.round((100 * current) / total);
+        bar.style.width = pct + '%';
+        bar.setAttribute('aria-valuenow', String(pct));
+        fraction.textContent = current + ' de ' + total + ' documentos';
+        label.textContent = 'Procesando documentos…';
+    }
+
+    function applyStreamEvent(ev) {
+        if (ev.type === 'start') {
+            fileTotal = ev.total || 0;
+            if (fileTotal === 0) {
+                setProgress(0, 0);
+            } else {
+                setProgress(0, fileTotal);
+            }
+        } else if (ev.type === 'progress') {
+            setProgress(ev.current || 0, ev.total || fileTotal || 1);
+        } else if (ev.type === 'done') {
+            const t = typeof ev.total === 'number' ? ev.total : fileTotal;
+            if (t > 0) {
+                setProgress(t, t);
+            } else {
+                setProgress(0, 0);
+            }
+            bar.classList.remove('progress-bar-animated', 'progress-bar-striped');
+            const s = ev.stats || {};
+            const msg =
+                'Sincronización finalizada. Procesados: ' + (s.procesados || 0) +
+                '. Insert/actualización: ' + (s.ok || 0) +
+                '. Omitidos (formato): ' + (s.omitidos_formato || 0) +
+                '. Sin ID: ' + (s.sin_id || 0) + '.';
+            if (ev.sp_ok) {
+                setAlert('success', msg + '<br><small>' + (ev.sp_msg || '') + '</small>');
+            } else {
+                setAlert('danger', msg + '<br><small class="text-danger">' + (ev.sp_msg || '') + '</small>');
+            }
+        } else if (ev.type === 'error') {
+            bar.classList.remove('progress-bar-animated', 'progress-bar-striped');
+            setAlert('danger', ev.message || 'Error desconocido.');
+        }
+    }
+
+    let fileTotal = 0;
+
+    btn.addEventListener('click', async function () {
+        const url = btn.dataset.syncUrl;
+        hideAlert();
+        btn.disabled = true;
+        area.classList.remove('d-none');
+        bar.classList.add('progress-bar-animated', 'progress-bar-striped');
+        fileTotal = 0;
+        bar.style.width = '0%';
+        bar.setAttribute('aria-valuenow', '0');
+        label.textContent = 'Listando archivos en Google Drive…';
+        fraction.textContent = '';
+
+        try {
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: { Accept: 'application/x-ndjson' },
+                credentials: 'same-origin',
+            });
+
+            if (res.status === 400) {
+                const err = await res.json().catch(function () { return {}; });
+                setAlert('danger', (err && err.error) ? err.error : 'No se pudo iniciar la sincronización.');
+                return;
+            }
+
+            if (!res.ok || !res.body) {
+                setAlert('danger', 'Error HTTP ' + res.status + ' al sincronizar.');
+                return;
+            }
+
+            const reader = res.body.getReader();
+            const dec = new TextDecoder();
+            let buf = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buf += dec.decode(value, { stream: true });
+                const lines = buf.split('\n');
+                buf = lines.pop() || '';
+                for (let i = 0; i < lines.length; i++) {
+                    const line = lines[i].trim();
+                    if (!line) continue;
+                    let ev;
+                    try {
+                        ev = JSON.parse(line);
+                    } catch (e) {
+                        continue;
+                    }
+                    applyStreamEvent(ev);
+                }
+            }
+            const tail = buf.trim();
+            if (tail) {
+                try {
+                    applyStreamEvent(JSON.parse(tail));
+                } catch (e) { /* ignore */ }
+            }
+        } catch (e) {
+            setAlert('danger', 'No se pudo completar la sincronización: ' + (e && e.message ? e.message : String(e)));
+        } finally {
+            btn.disabled = false;
+        }
+    });
+})();
+</script>
 {% endblock %}

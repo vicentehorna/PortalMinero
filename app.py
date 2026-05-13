@@ -45,10 +45,19 @@ from database import (
     get_config_empresa,
     get_listado_generar_boletas,
     insertar_documento_minero,
+    get_ruta_documentos_usuario,
+    sincronizar_metadata_drive,
+    sincronizar_metadata_drive_lote,
+    ejecutar_sp_updatecompany_documentos_boletas,
+    actualizar_fechadescarga_boleta,
+    update_ruta_documentos_usuario,
+    get_tipos_documentos,
 )
 
 load_dotenv()
 app = Flask(__name__)
+# Credenciales Google Drive: use GOOGLE_DRIVE_CREDENTIALS_FILE o SERVICE_ACCOUNT_FILE en .env (ruta al JSON).
+SERVICE_ACCOUNT_FILE = os.getenv('SERVICE_ACCOUNT_FILE')
 app.secret_key = os.getenv('FLASK_SECRET_KEY', 'dev-key-123')
 
 logging.getLogger('werkzeug').setLevel(logging.ERROR)
@@ -149,6 +158,42 @@ def _fmt_periodo_yyyy_mm(val):
     if len(s) >= 6:
         return f'{s[:4]}-{s[4:6]}'
     return str(val).strip()
+
+
+def _fmt_fecha_hora_dd_mm_yyyy_hh_mm(val):
+    """
+    Fecha y hora para columnas de reporte (p. ej. Fecha descarga): dd/mm/yyyy HH:MM.
+    Acepta datetime, date o cadenas típicas de SQL/pyodbc.
+    """
+    if val is None:
+        return None
+    if isinstance(val, datetime):
+        return val.strftime('%d/%m/%Y %H:%M')
+    if isinstance(val, date):
+        return val.strftime('%d/%m/%Y')
+    s = str(val).strip()
+    if not s:
+        return None
+    try:
+        if 'T' in s:
+            norm = s.replace('Z', '+00:00') if s.endswith('Z') else s
+            dt = datetime.fromisoformat(norm)
+            if dt.tzinfo is not None:
+                dt = dt.replace(tzinfo=None)
+            return dt.strftime('%d/%m/%Y %H:%M')
+    except Exception:
+        pass
+    for fmt in ('%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%d %H:%M:%S'):
+        try:
+            return datetime.strptime(s[:26], fmt).strftime('%d/%m/%Y %H:%M')
+        except ValueError:
+            continue
+    try:
+        if len(s) >= 10 and s[4] == '-' and s[7] == '-':
+            return datetime.strptime(s[:10], '%Y-%m-%d').strftime('%d/%m/%Y')
+    except ValueError:
+        pass
+    return s
 
 
 def _report_params_from_json(req):
@@ -597,60 +642,416 @@ def dashboard():
     return render_template('dashboard.html')
 
 
-DOCUMENTOS_MINERIA_PATH = os.getenv(
-    'DOCUMENTOS_MINERIA_PATH',
-    r'C:\HM\ADRIAN\DOCUMENTOS',
-)
+def _ruta_carga_documentos_efectiva(user_id):
+    """Identificador de carpeta de Google Drive (guardado en SY_User.RutaDocumentos)."""
+    return get_ruta_documentos_usuario(user_id)
+
+
+def _procesar_carga_desde_carpeta_local_respaldo(ruta_servidor):
+    """
+    Respaldo de lógica antigua (escaneo de carpeta local en servidor).
+    Conservada para contingencia, no usada en el flujo actual.
+    """
+    archivos = [f for f in os.listdir(ruta_servidor) if f.lower().endswith('.pdf')]
+    nuevos = 0
+    omitidos_formato = 0
+    for nombre_archivo in archivos:
+        base = nombre_archivo[:-4] if nombre_archivo.lower().endswith('.pdf') else nombre_archivo
+        base = base.strip()
+        if base.count('_') < 3:
+            omitidos_formato += 1
+            continue
+        partes = base.split('_')
+        if len(partes) < 4:
+            omitidos_formato += 1
+            continue
+        datos = {
+            'tipo': str(partes[0]).strip(),
+            'periodo': str(partes[1]).strip(),
+            'dni': str(partes[2]).strip(),
+            'nombre': ' '.join(str(p).strip() for p in partes[3:] if str(p).strip()).strip(),
+            'archivo_original': nombre_archivo,
+        }
+        if insertar_documento_minero(datos):
+            nuevos += 1
+    return {
+        'encontrados': len(archivos),
+        'nuevos': nuevos,
+        'omitidos_formato': omitidos_formato,
+    }
+
+
+def _resolver_credenciales_drive():
+    """
+    Ruta del JSON de credenciales de Service Account.
+    Prioridad:
+      1) GOOGLE_DRIVE_CREDENTIALS_FILE
+      2) SERVICE_ACCOUNT_FILE
+      3) google_keys.json en la raíz del proyecto (si es service_account)
+      4) primer *.json del proyecto con "type": "service_account"
+    """
+    from pathlib import Path
+
+    root = Path(app.root_path)
+
+    for env_key in ('GOOGLE_DRIVE_CREDENTIALS_FILE', 'SERVICE_ACCOUNT_FILE'):
+        cfg = str(os.getenv(env_key) or '').strip()
+        if not cfg:
+            continue
+        p = Path(cfg)
+        if not p.is_absolute():
+            p = root / p
+        if p.is_file():
+            try:
+                with p.open('r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if str(data.get('type') or '').strip() != 'service_account':
+                    logging.warning(
+                        'Drive: el JSON en %s no tiene type=service_account (clave type=%r).',
+                        p,
+                        data.get('type'),
+                    )
+                    continue
+            except Exception as e:
+                logging.warning('Drive: no se pudo leer el JSON de credenciales %s: %s', p, e)
+                continue
+            return str(p)
+
+    for fname in ('google_keys.json',):
+        p = root / fname
+        if not p.is_file():
+            continue
+        try:
+            with p.open('r', encoding='utf-8') as f:
+                data = json.load(f)
+            if str(data.get('type') or '').strip() == 'service_account':
+                return str(p)
+        except Exception as e:
+            logging.warning('Drive: error al leer %s: %s', p, e)
+            continue
+
+    for p in root.glob('*.json'):
+        try:
+            with p.open('r', encoding='utf-8') as f:
+                data = json.load(f)
+            if str(data.get('type') or '').strip() == 'service_account':
+                return str(p)
+        except Exception:
+            continue
+    return None
+
+
+def _runtime_error_google_api(exc):
+    """Convierte fallos de red/API de Google en RuntimeError con texto útil para el usuario."""
+    msg = str(exc)
+    if isinstance(exc, TimeoutError) or '10060' in msg or 'timed out' in msg.lower() or 'timeout' in msg.lower():
+        return RuntimeError(
+            'No se pudo conectar con Google (timeout). Suele deberse a: (1) antivirus o firewall de terceros '
+            'que bloquean a Python o las conexiones HTTPS — permita el ejecutable de Python y los dominios '
+            'googleapis.com y oauth2.googleapis.com; (2) falta de salida a Internet; (3) proxy corporativo '
+            '(configure HTTPS_PROXY en el servidor si aplica). '
+            f'Detalle: {msg}'
+        )
+    return RuntimeError(
+        'Error al usar la API de Google Drive. Revise el JSON de service account, que la carpeta esté '
+        f'compartida con la cuenta del JSON y la red. Detalle: {msg}'
+    )
+
+
+def _mensaje_error_descarga_drive(exc):
+    """Texto legible para UI / JSON ante fallos de Google Drive en el servidor."""
+    if isinstance(exc, TimeoutError):
+        return (
+            'Tiempo de espera al conectar con Google. Revise antivirus/firewall (debe permitir Python y '
+            'HTTPS hacia oauth2.googleapis.com y www.googleapis.com), red y proxy.'
+        )
+    msg = str(exc)
+    if '10060' in msg or 'timed out' in msg.lower() or 'timeout' in msg.lower():
+        return (
+            'Sin respuesta al conectar con Google (timeout). Antivirus o firewall pueden estar bloqueando la '
+            'aplicación; añada una excepción para Python o para el dominio de Google APIs.'
+        )
+    return f'No se pudo obtener el archivo desde Google Drive: {msg}'
+
+
+def _descarga_personal_es_fetch():
+    """True si el cliente pide errores en JSON (descarga desde el reporte con fetch)."""
+    return request.headers.get('X-Fetch-Descarga') == '1'
+
+
+def _listar_archivos_pdf_drive(folder_id):
+    """
+    Lista PDF de una carpeta de Google Drive y retorna [{'name', 'id'}, ...].
+    Errores de credenciales, JSON o API se encapsulan en RuntimeError con mensaje claro.
+    """
+    try:
+        cred_path = _resolver_credenciales_drive()
+        if not cred_path:
+            raise RuntimeError(
+                'No se encontró un JSON válido de service account. Defina GOOGLE_DRIVE_CREDENTIALS_FILE o '
+                'SERVICE_ACCOUNT_FILE en .env, o coloque google_keys.json u otro *.json con type=service_account '
+                'en la raíz del proyecto.'
+            )
+
+        service = _build_drive_service()
+        q = (
+            f"'{folder_id}' in parents and "
+            "mimeType='application/pdf' and trashed=false"
+        )
+        archivos = []
+        page_token = None
+        while True:
+            resp = service.files().list(
+                q=q,
+                spaces='drive',
+                fields='nextPageToken, files(id, name)',
+                pageSize=1000,
+                orderBy='name',
+                pageToken=page_token,
+            ).execute()
+            archivos.extend(resp.get('files', []))
+            page_token = resp.get('nextPageToken')
+            if not page_token:
+                break
+        return archivos
+    except RuntimeError:
+        raise
+    except Exception as e:
+        logging.exception('_listar_archivos_pdf_drive')
+        raise _runtime_error_google_api(e) from e
+
+
+def _build_drive_service():
+    """Construye cliente de Google Drive usando service account (cliente HTTP estándar de la librería)."""
+    try:
+        from google.oauth2 import service_account
+        from googleapiclient.discovery import build
+    except Exception as e:
+        raise RuntimeError(
+            "Faltan dependencias de Google Drive. Instale google-api-python-client y google-auth."
+        ) from e
+
+    cred_path = _resolver_credenciales_drive()
+    if not cred_path:
+        raise RuntimeError(
+            "No se encontró JSON de credenciales de Google Drive. Configure GOOGLE_DRIVE_CREDENTIALS_FILE "
+            "o coloque el JSON de service account en la raíz del proyecto."
+        )
+
+    scopes = ['https://www.googleapis.com/auth/drive.readonly']
+    creds = service_account.Credentials.from_service_account_file(cred_path, scopes=scopes)
+    return build('drive', 'v3', credentials=creds, cache_discovery=False)
+
+
+def _descargar_archivo_drive(file_id):
+    """
+    Descarga archivo de Drive desde backend (service account), evitando 403 en navegador del usuario.
+    Retorna (BytesIO, nombre_archivo, mime_type).
+    """
+    try:
+        from googleapiclient.http import MediaIoBaseDownload
+    except Exception as e:
+        raise RuntimeError(
+            "Falta google-api-python-client para descarga desde Drive."
+        ) from e
+
+    service = _build_drive_service()
+    meta = service.files().get(fileId=file_id, fields='name,mimeType').execute()
+    req = service.files().get_media(fileId=file_id)
+    fh = io.BytesIO()
+    downloader = MediaIoBaseDownload(fh, req)
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+    fh.seek(0)
+    nombre = str(meta.get('name') or f'{file_id}.pdf')
+    mime = str(meta.get('mimeType') or 'application/pdf')
+    return fh, nombre, mime
+
+
+def _normalizar_folder_id_drive(valor):
+    """
+    Acepta ID puro o URL de carpeta de Google Drive y retorna el folder_id.
+    Retorna None si no parece un ID/URL válido.
+    """
+    raw = str(valor or '').strip()
+    if not raw:
+        return None
+
+    # Si pegaron URL de Drive, extraer el ID
+    m = re.search(r"/folders/([A-Za-z0-9_-]+)", raw)
+    if m:
+        return m.group(1)
+
+    # Aceptar ID directo (alfanumérico + _-)
+    if re.match(r"^[A-Za-z0-9_-]{10,}$", raw):
+        return raw
+
+    return None
+
+
+@app.route('/configuracion-usuario', methods=['GET', 'POST'])
+@login_required
+def configuracion_usuario():
+    if request.method == 'POST':
+        ruta = request.form.get('ruta_documentos', '')
+        ok, msg = update_ruta_documentos_usuario(current_user.id, ruta)
+        flash(msg, 'success' if ok else 'error')
+        return redirect(url_for('configuracion_usuario'))
+
+    ruta_actual = get_ruta_documentos_usuario(current_user.id) or ''
+    return render_template(
+        'configuracion_usuario.html',
+        ruta_actual=ruta_actual,
+    )
 
 
 @app.route('/carga-documentos')
 @login_required
 def carga_documentos():
-    return render_template('carga_documentos.html', ruta_servidor=DOCUMENTOS_MINERIA_PATH)
+    ruta_efectiva = _ruta_carga_documentos_efectiva(current_user.id)
+    return render_template(
+        'carga_documentos.html',
+        ruta_servidor=ruta_efectiva,
+    )
 
 
 @app.route('/procesar-carga-servidor', methods=['POST'])
 @login_required
 def procesar_carga_servidor():
-    ruta_servidor = DOCUMENTOS_MINERIA_PATH
+    folder_cfg = _ruta_carga_documentos_efectiva(current_user.id)
+    folder_id = _normalizar_folder_id_drive(folder_cfg)
+    if not folder_id:
+        flash(
+            'La carpeta de Google Drive no es válida. Guarde el ID de carpeta o pegue la URL de Drive en Configuración por usuario.',
+            'error',
+        )
+        return redirect(url_for('carga_documentos'))
     try:
-        if not os.path.isdir(ruta_servidor):
-            flash(f'La carpeta no existe o no es accesible: {ruta_servidor}', 'error')
-            return redirect(url_for('carga_documentos'))
-
-        archivos = [f for f in os.listdir(ruta_servidor) if f.lower().endswith('.pdf')]
-        nuevos = 0
-        omitidos_formato = 0
-
-        for nombre_archivo in archivos:
-            base = nombre_archivo[:-4] if nombre_archivo.lower().endswith('.pdf') else nombre_archivo
-            partes = base.split('_')
-            if len(partes) < 4:
-                omitidos_formato += 1
-                continue
-            datos = {
-                'tipo': partes[0],
-                'periodo': partes[1],
-                'dni': partes[2],
-                'nombre': ' '.join(partes[3:]).strip(),
-                'archivo_original': nombre_archivo,
-            }
-            if insertar_documento_minero(datos):
-                nuevos += 1
+        archivos_drive = _listar_archivos_pdf_drive(folder_id)
+        stats = sincronizar_metadata_drive(archivos_drive)
+        ok_sp, msg_sp = ejecutar_sp_updatecompany_documentos_boletas()
 
         flash(
-            f'Proceso finalizado. Archivos PDF encontrados: {len(archivos)}. '
-            f'Registros nuevos insertados: {nuevos}. '
-            f'Omitidos por nombre con menos de 4 segmentos: {omitidos_formato}.',
+            f'Sincronización finalizada. PDF en Drive: {len(archivos_drive)}. '
+            f'Procesados: {stats.get("procesados", 0)}. '
+            f'Sincronizados (insert/update): {stats.get("ok", 0)}. '
+            f'Omitidos por formato: {stats.get("omitidos_formato", 0)}. '
+            f'Sin ID de Drive: {stats.get("sin_id", 0)}.',
             'success',
         )
-    except OSError as e:
-        flash(f'Error al acceder a la ruta del servidor: {e}', 'error')
+        if ok_sp:
+            flash(msg_sp, 'success')
+        else:
+            flash(msg_sp, 'error')
     except Exception as e:
         logging.exception('procesar_carga_servidor')
-        flash(f'Error al procesar la carga: {e}', 'error')
+        flash(str(e), 'error')
 
     return redirect(url_for('carga_documentos'))
+
+
+CARGA_DOCUMENTOS_BATCH_SYNC = 25
+
+
+@app.route('/api/carga-documentos/sincronizar', methods=['POST'])
+@login_required
+def api_carga_documentos_sincronizar():
+    """
+    Sincroniza PDF de Drive contra DocumentosBoletas por lotes y emite NDJSON
+    (start → progress* → done | error) para barra de progreso en el cliente.
+    """
+    folder_cfg = _ruta_carga_documentos_efectiva(current_user.id)
+    folder_id = _normalizar_folder_id_drive(folder_cfg)
+    if not folder_id:
+        return jsonify(
+            error=(
+                'La carpeta de Google Drive no es válida. Guarde el ID de carpeta o la URL '
+                'en Configuración por usuario.'
+            )
+        ), 400
+
+    batch = max(1, int(CARGA_DOCUMENTOS_BATCH_SYNC))
+
+    def generate():
+        conn = None
+        cursor = None
+        try:
+            archivos = _listar_archivos_pdf_drive(folder_id)
+            total = len(archivos)
+            yield json.dumps({'type': 'start', 'total': total}, ensure_ascii=False) + '\n'
+
+            cum = {'procesados': 0, 'omitidos_formato': 0, 'sin_id': 0, 'ok': 0}
+            conn = get_db_connection()
+            cursor = conn.cursor()
+
+            for i in range(0, total, batch):
+                chunk = archivos[i : i + batch]
+                sincronizar_metadata_drive_lote(cursor, chunk, cum)
+                conn.commit()
+                current = min(i + len(chunk), total)
+                yield (
+                    json.dumps(
+                        {
+                            'type': 'progress',
+                            'current': current,
+                            'total': total,
+                            'stats': dict(cum),
+                        },
+                        ensure_ascii=False,
+                    )
+                    + '\n'
+                )
+
+            if cursor:
+                cursor.close()
+                cursor = None
+            if conn:
+                conn.close()
+                conn = None
+
+            ok_sp, msg_sp = ejecutar_sp_updatecompany_documentos_boletas()
+            yield (
+                json.dumps(
+                    {
+                        'type': 'done',
+                        'total': total,
+                        'stats': dict(cum),
+                        'sp_ok': ok_sp,
+                        'sp_msg': msg_sp,
+                    },
+                    ensure_ascii=False,
+                )
+                + '\n'
+            )
+        except Exception as e:
+            logging.exception('api_carga_documentos_sincronizar')
+            if conn:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+            yield json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False) + '\n'
+        finally:
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype='application/x-ndjson',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+        },
+    )
 
 
 @app.route('/reporte-liquidaciones')
@@ -676,6 +1077,12 @@ def reporte_vacaciones_detalle_page():
 @login_required
 def reporte_saldo_vacaciones_page():
     return render_template('reporte_saldo_vacaciones.html')
+
+
+@app.route('/reporte-documentos-personal')
+@login_required
+def reporte_documentos_personal_page():
+    return render_template('reporte_documentos_personal.html')
 
 
 @app.route('/reporte-descansos-medicos-detalle')
@@ -1205,6 +1612,27 @@ def api_trabajadores():
                 pass
 
 
+@app.route('/api/selectores/tipos-documento')
+@login_required
+def api_tipos_documento():
+    """PR_tipodocWeb → Tipodocumento, name (para filtros de reportes)."""
+    try:
+        rows = get_tipos_documentos() or []
+        data = []
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            rid = str(r.get('Tipodocumento') or '').strip()
+            if not rid:
+                continue
+            txt = str(r.get('name') or rid).strip()
+            data.append({'id': rid, 'text': txt})
+        return jsonify(data)
+    except Exception:
+        logging.exception('api_tipos_documento')
+        return jsonify([])
+
+
 @app.route('/api/selectores/tipos-descanso-medico')
 @login_required
 def api_tipos_descanso_medico():
@@ -1652,6 +2080,115 @@ def reporte_vacaciones_detalle_post():
                 conn.close()
             except Exception:
                 pass
+
+
+@app.route('/reporte_documentos_personal', methods=['POST'])
+@login_required
+def reporte_documentos_personal_post():
+    """sp_pr_reportenotificaciones_web @cia, @period, @payrolltype, @tipodoc, @person."""
+    body = request.get_json(silent=True) or {}
+    cia = str(body.get('cia') or '').strip()
+    payroll_type = str(body.get('payroll_type') or body.get('payrolltype') or '').strip()
+    period_raw = body.get('period')
+    ps = str(period_raw).strip() if period_raw is not None else ''
+    period = '0' if ps == '' or ps == '0' else _normalize_pr_period(period_raw)
+    person = str(body.get('person') or '0').strip() or '0'
+    tipodoc = str(body.get('tipodoc') or body.get('tipodocumento') or '0').strip() or '0'
+
+    if not cia:
+        return jsonify({"error": "Seleccione una compañía."}), 400
+    if not payroll_type:
+        return jsonify({"error": "Debe indicar tipo de planilla."}), 400
+
+    headers_es = [
+        'Código',
+        'Nombre',
+        'Tipo documento',
+        'Periodo',
+        'Fecha descarga',
+        'Descargar',
+    ]
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "EXEC sp_pr_reportenotificaciones_web @cia=?, @period=?, @payrolltype=?, @tipodoc=?, @person=?",
+            (cia, period, payroll_type, tipodoc, person),
+        )
+        rows = _dicts_first_nonempty_resultset(cursor)
+        resultado = []
+        for r in rows:
+            periodo_doc = _fmt_periodo_yyyy_mm(r.get('periodo'))
+            drive_id = str(r.get('drivefileid') or '').strip()
+            tipo_doc = _jsonable_value(r.get('tipodocumento'))
+            dni = str(r.get('person') or '').strip()
+
+            fila = [
+                _jsonable_value(r.get('person')),
+                _jsonable_value(r.get('name')),
+                tipo_doc,
+                periodo_doc,
+                _fmt_fecha_hora_dd_mm_yyyy_hh_mm(r.get('fechadescarga')),
+                {
+                    'drivefileid': drive_id,
+                    'person': dni,
+                    'period': str(r.get('periodo') or '').strip(),
+                    'tipodocumento': str(tipo_doc or '').strip(),
+                    'cia': cia,
+                },
+            ]
+            resultado.append(fila)
+        return jsonify({"headers": headers_es, "data": resultado})
+    except Exception as e:
+        logging.exception("reporte_documentos_personal_post")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+@app.route('/documentos-personal/descargar')
+@login_required
+def descargar_documento_personal():
+    drive_id = str(request.args.get('file_id') or '').strip()
+    person = str(request.args.get('person') or '').strip()
+    period = str(request.args.get('period') or '').strip()
+    tipodocumento = str(request.args.get('tipodocumento') or '').strip()
+    cia = str(request.args.get('cia') or '').strip() or str(session.get('company') or '').strip()
+    json_errors = _descarga_personal_es_fetch()
+
+    if not drive_id:
+        if json_errors:
+            return jsonify({'error': 'No se encontró el archivo de Google Drive (file_id vacío).'}), 400
+        flash('No se encontró el archivo de Google Drive.', 'error')
+        return redirect(url_for('reporte_documentos_personal_page'))
+
+    try:
+        archivo_io, nombre_archivo, mime = _descargar_archivo_drive(drive_id)
+    except Exception as e:
+        logging.exception('descargar_documento_personal')
+        msg = _mensaje_error_descarga_drive(e)
+        if json_errors:
+            return jsonify({'error': msg}), 502
+        flash(msg, 'error')
+        return redirect(url_for('reporte_documentos_personal_page'))
+
+    if cia and person and period and tipodocumento:
+        ok = actualizar_fechadescarga_boleta(cia, person, tipodocumento, period)
+        if not ok:
+            flash('No se pudo actualizar la fecha de descarga en DocumentosBoletas.', 'error')
+
+    return send_file(
+        archivo_io,
+        as_attachment=True,
+        download_name=nombre_archivo,
+        mimetype=mime,
+    )
 
 
 def _parse_fecha_reporte_saldo(raw):

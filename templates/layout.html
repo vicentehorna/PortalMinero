@@ -119,6 +119,12 @@
                     </a>
                 </li>
 
+                <li class="{{ 'active' if request.endpoint == 'configuracion_usuario' else '' }}">
+                    <a href="{{ url_for('configuracion_usuario') }}">
+                        <i class="bi bi-person-gear"></i> Configuración por usuario
+                    </a>
+                </li>
+
                 <li class="{{ 'active' if request.endpoint == 'carga_documentos' else '' }}">
                     <a href="{{ url_for('carga_documentos') }}">
                         <i class="bi bi-cloud-upload"></i> Cargar documentos
@@ -138,6 +144,12 @@
                 <li class="{{ 'active' if request.endpoint == 'reporte_saldo_vacaciones_page' else '' }}">
                     <a href="{{ url_for('reporte_saldo_vacaciones_page') }}">
                         <i class="bi bi-pie-chart"></i> Saldo de vacaciones
+                    </a>
+                </li>
+
+                <li class="{{ 'active' if request.endpoint == 'reporte_documentos_personal_page' else '' }}">
+                    <a href="{{ url_for('reporte_documentos_personal_page') }}">
+                        <i class="bi bi-folder2-open"></i> Documentos del personal
                     </a>
                 </li>
 

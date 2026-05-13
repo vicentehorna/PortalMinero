@@ -215,6 +215,7 @@
                     payroll: val('cboTipoPlanilla'),
                     periodo: val('cboPeriodo'),
                     person: val('cboTrabajador'),
+                    tipodoc: val('cboTipoDocumento'),
                     timestamp: Date.now()
                 };
                 localStorage.setItem(STORAGE_KEY_VACACIONES_DETALLE, JSON.stringify(estado));
@@ -285,12 +286,20 @@
                 }
             }
 
+            const cboTipoDoc = document.getElementById('cboTipoDocumento');
+            if (cboTipoDoc && filtros.tipodoc != null && String(filtros.tipodoc).trim() !== '') {
+                const td = String(filtros.tipodoc).trim();
+                if (optionExists(cboTipoDoc, td)) {
+                    cboTipoDoc.value = td;
+                }
+            }
+
             guardar();
             return true;
         }
 
         function registrarGuardadoEnCambio() {
-            ['cboCompania', 'cboTipoPlanilla', 'cboPeriodo', 'cboTrabajador'].forEach((id) => {
+            ['cboCompania', 'cboTipoPlanilla', 'cboPeriodo', 'cboTrabajador', 'cboTipoDocumento'].forEach((id) => {
                 const el = document.getElementById(id);
                 if (el) el.addEventListener('change', guardar);
             });
