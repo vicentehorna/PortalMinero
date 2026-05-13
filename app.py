@@ -683,7 +683,9 @@ def _procesar_carga_desde_carpeta_local_respaldo(ruta_servidor):
 
 def _resolver_credenciales_drive():
     """
-    Ruta del JSON de credenciales de Service Account.
+    Ruta del JSON de credenciales de Service Account (solo archivo en disco).
+    Para Render sin archivo en el repo, use GOOGLE_DRIVE_CREDENTIALS_JSON (ver _credentials_drive_service_account).
+
     Prioridad:
       1) GOOGLE_DRIVE_CREDENTIALS_FILE
       2) SERVICE_ACCOUNT_FILE
@@ -785,14 +787,6 @@ def _listar_archivos_pdf_drive(folder_id):
     Errores de credenciales, JSON o API se encapsulan en RuntimeError con mensaje claro.
     """
     try:
-        cred_path = _resolver_credenciales_drive()
-        if not cred_path:
-            raise RuntimeError(
-                'No se encontró un JSON válido de service account. Defina GOOGLE_DRIVE_CREDENTIALS_FILE o '
-                'SERVICE_ACCOUNT_FILE en .env, o coloque google_keys.json u otro *.json con type=service_account '
-                'en la raíz del proyecto.'
-            )
-
         service = _build_drive_service()
         q = (
             f"'{folder_id}' in parents and "
@@ -821,25 +815,61 @@ def _listar_archivos_pdf_drive(folder_id):
         raise _runtime_error_google_api(e) from e
 
 
-def _build_drive_service():
-    """Construye cliente de Google Drive usando service account (cliente HTTP estándar de la librería)."""
+def _credentials_drive_service_account():
+    """
+    Credenciales OAuth de la service account para la API de Drive.
+
+    Orden (recomendado en Render: JSON como secreto, sin subir archivo al repo):
+      1) GOOGLE_DRIVE_CREDENTIALS_JSON — contenido completo del JSON (una sola línea o compacto).
+      2) GOOGLE_SERVICE_ACCOUNT_JSON — alias del anterior.
+      3) Archivo en disco vía _resolver_credenciales_drive() (GOOGLE_DRIVE_CREDENTIALS_FILE, etc.).
+    """
     try:
         from google.oauth2 import service_account
-        from googleapiclient.discovery import build
     except Exception as e:
         raise RuntimeError(
-            "Faltan dependencias de Google Drive. Instale google-api-python-client y google-auth."
+            'Faltan dependencias de Google Drive. Instale google-api-python-client y google-auth.'
         ) from e
+
+    scopes = ['https://www.googleapis.com/auth/drive.readonly']
+
+    for env_name in ('GOOGLE_DRIVE_CREDENTIALS_JSON', 'GOOGLE_SERVICE_ACCOUNT_JSON'):
+        raw = str(os.getenv(env_name) or '').strip()
+        if not raw:
+            continue
+        try:
+            info = json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(
+                f'La variable de entorno {env_name} no contiene JSON válido. En Render pegue el JSON completo '
+                f'como secreto (sin comillas externas). Detalle: {e}'
+            ) from e
+        if str(info.get('type') or '').strip() != 'service_account':
+            raise RuntimeError(
+                f'La variable {env_name} debe ser un JSON de Google con "type": "service_account".'
+            )
+        return service_account.Credentials.from_service_account_info(info, scopes=scopes)
 
     cred_path = _resolver_credenciales_drive()
     if not cred_path:
         raise RuntimeError(
-            "No se encontró JSON de credenciales de Google Drive. Configure GOOGLE_DRIVE_CREDENTIALS_FILE "
-            "o coloque el JSON de service account en la raíz del proyecto."
+            'No hay credenciales de Google Drive. En Render: cree un secreto GOOGLE_DRIVE_CREDENTIALS_JSON con el '
+            'contenido del archivo JSON de la service account. En local puede usar GOOGLE_DRIVE_CREDENTIALS_FILE o '
+            'SERVICE_ACCOUNT_FILE con la ruta al JSON.'
         )
+    return service_account.Credentials.from_service_account_file(cred_path, scopes=scopes)
 
-    scopes = ['https://www.googleapis.com/auth/drive.readonly']
-    creds = service_account.Credentials.from_service_account_file(cred_path, scopes=scopes)
+
+def _build_drive_service():
+    """Construye cliente de Google Drive usando service account (cliente HTTP estándar de la librería)."""
+    try:
+        from googleapiclient.discovery import build
+    except Exception as e:
+        raise RuntimeError(
+            'Faltan dependencias de Google Drive. Instale google-api-python-client y google-auth.'
+        ) from e
+
+    creds = _credentials_drive_service_account()
     return build('drive', 'v3', credentials=creds, cache_discovery=False)
 
 
