@@ -271,6 +271,7 @@ document.addEventListener('DOMContentLoaded', async function () {
                 try {
                     const j = JSON.parse(text);
                     if (j && j.error) detail = j.error;
+                    if (j && j.code) detail += ' (Ref. soporte: ' + j.code + ')';
                 } catch (e2) { /* no es JSON */ }
                 alert(detail);
                 return;
@@ -290,6 +291,7 @@ document.addEventListener('DOMContentLoaded', async function () {
             a.click();
             a.remove();
             URL.revokeObjectURL(a.href);
+            await ejecutarConsulta();
         } catch (err) {
             console.error(err);
             alert('Error de red al descargar el documento.');

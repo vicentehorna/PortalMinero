@@ -140,7 +140,11 @@
             }
         } else if (ev.type === 'error') {
             bar.classList.remove('progress-bar-animated', 'progress-bar-striped');
-            setAlert('danger', ev.message || 'Error desconocido.');
+            let em = ev.message || 'Error desconocido.';
+            if (ev.code) {
+                em += '<br><small class="text-muted">Referencia para soporte: ' + String(ev.code) + '</small>';
+            }
+            setAlert('danger', em);
         }
     }
 

@@ -748,10 +748,10 @@ def _runtime_error_google_api(exc):
     msg = str(exc)
     if isinstance(exc, TimeoutError) or '10060' in msg or 'timed out' in msg.lower() or 'timeout' in msg.lower():
         return RuntimeError(
-            'No se pudo conectar con Google (timeout). Suele deberse a: (1) antivirus o firewall de terceros '
-            'que bloquean a Python o las conexiones HTTPS — permita el ejecutable de Python y los dominios '
-            'googleapis.com y oauth2.googleapis.com; (2) falta de salida a Internet; (3) proxy corporativo '
-            '(configure HTTPS_PROXY en el servidor si aplica). '
+            'No se pudo conectar con Google (timeout). Revise: (1) firewall de Windows o de terceros — permita '
+            'Python y HTTPS a googleapis.com y oauth2.googleapis.com; (2) VPN o red corporativa; (3) Wi‑Fi o '
+            'enlace inestable; (4) proxy (HTTPS_PROXY si aplica). Opcional: variable GOOGLE_HTTP_TIMEOUT (segundos, '
+            'p. ej. 180) para alargar el tiempo de espera. '
             f'Detalle: {msg}'
         )
     return RuntimeError(
@@ -760,20 +760,68 @@ def _runtime_error_google_api(exc):
     )
 
 
-def _mensaje_error_descarga_drive(exc):
-    """Texto legible para UI / JSON ante fallos de Google Drive en el servidor."""
+def _drive_es_timeout_o_red(exc, depth=0):
+    """True si la excepción (o su __cause__) indica timeout o error típico de conexión."""
+    if depth > 8 or exc is None:
+        return False
     if isinstance(exc, TimeoutError):
-        return (
-            'Tiempo de espera al conectar con Google. Revise antivirus/firewall (debe permitir Python y '
-            'HTTPS hacia oauth2.googleapis.com y www.googleapis.com), red y proxy.'
-        )
+        return True
     msg = str(exc)
     if '10060' in msg or 'timed out' in msg.lower() or 'timeout' in msg.lower():
+        return True
+    return _drive_es_timeout_o_red(getattr(exc, '__cause__', None), depth + 1)
+
+
+def _codigo_error_drive_para_soporte(exc):
+    """Código corto para que el usuario lo comunique a soporte (sin detalle técnico)."""
+    return 'DRIVE_TIMEOUT' if _drive_es_timeout_o_red(exc) else 'DRIVE_UNAVAILABLE'
+
+
+def _mensaje_error_drive_para_usuario(exc):
+    """
+    Texto para quien usa la web: no menciona Python, firewalls ni variables de entorno.
+    La conexión real a Google la hace el servidor; el cliente solo ve este mensaje.
+    """
+    if _drive_es_timeout_o_red(exc):
         return (
-            'Sin respuesta al conectar con Google (timeout). Antivirus o firewall pueden estar bloqueando la '
-            'aplicación; añada una excepción para Python o para el dominio de Google APIs.'
+            'En este momento el almacenamiento de documentos no respondió a tiempo. '
+            'Intente de nuevo en unos minutos. Si el problema continúa, contacte a soporte o al área de sistemas.'
         )
-    return f'No se pudo obtener el archivo desde Google Drive: {msg}'
+    return (
+        'No pudimos obtener el documento desde el almacenamiento en este momento. '
+        'Si el problema continúa, contacte a soporte o al área de sistemas.'
+    )
+
+
+def _mensaje_error_descarga_drive(exc):
+    """Alias hacia mensaje de usuario final (descarga desde reporte / flash)."""
+    return _mensaje_error_drive_para_usuario(exc)
+
+
+def _drive_http_timeout_seconds():
+    """Timeout de socket para Drive (httplib2). Env GOOGLE_HTTP_TIMEOUT, por defecto 180 s, mínimo 30."""
+    try:
+        return max(30, int(os.getenv('GOOGLE_HTTP_TIMEOUT', '180')))
+    except (TypeError, ValueError):
+        return 180
+
+
+def _drive_refresh_credentials_if_needed(creds):
+    """
+    Refresca el access token con requests si hace falta.
+    En algunos equipos Windows es más estable que el primer refresh vía httplib2.
+    """
+    if not creds:
+        return
+    try:
+        from google.auth.transport.requests import Request as GoogleAuthRequest
+    except Exception:
+        return
+    try:
+        if getattr(creds, 'expired', False) or not getattr(creds, 'valid', True):
+            creds.refresh(GoogleAuthRequest())
+    except Exception:
+        logging.debug('Drive: refresh previo con requests omitido', exc_info=True)
 
 
 def _descarga_personal_es_fetch():
@@ -861,7 +909,10 @@ def _credentials_drive_service_account():
 
 
 def _build_drive_service():
-    """Construye cliente de Google Drive usando service account (cliente HTTP estándar de la librería)."""
+    """
+    Cliente Drive (service account). Refresca token con requests si aplica y usa AuthorizedHttp con timeout
+    largo para reducir timeouts intermitentes (WinError 10060) en redes lentas o firewalls lentos.
+    """
     try:
         from googleapiclient.discovery import build
     except Exception as e:
@@ -870,7 +921,22 @@ def _build_drive_service():
         ) from e
 
     creds = _credentials_drive_service_account()
-    return build('drive', 'v3', credentials=creds, cache_discovery=False)
+    _drive_refresh_credentials_if_needed(creds)
+    timeout_s = _drive_http_timeout_seconds()
+    try:
+        import httplib2
+        from google_auth_httplib2 import AuthorizedHttp
+
+        http = httplib2.Http(timeout=timeout_s)
+        authed = AuthorizedHttp(creds, http=http)
+        return build('drive', 'v3', http=authed, cache_discovery=False)
+    except Exception as e:
+        logging.warning(
+            'Drive: no se pudo usar AuthorizedHttp (timeout=%ss), cliente por defecto: %s',
+            timeout_s,
+            e,
+        )
+        return build('drive', 'v3', credentials=creds, cache_discovery=False)
 
 
 def _descargar_archivo_drive(file_id):
@@ -976,7 +1042,7 @@ def procesar_carga_servidor():
             flash(msg_sp, 'error')
     except Exception as e:
         logging.exception('procesar_carga_servidor')
-        flash(str(e), 'error')
+        flash(_mensaje_error_drive_para_usuario(e), 'error')
 
     return redirect(url_for('carga_documentos'))
 
@@ -1061,7 +1127,17 @@ def api_carga_documentos_sincronizar():
                     conn.rollback()
                 except Exception:
                     pass
-            yield json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False) + '\n'
+            yield (
+                json.dumps(
+                    {
+                        'type': 'error',
+                        'message': _mensaje_error_drive_para_usuario(e),
+                        'code': _codigo_error_drive_para_soporte(e),
+                    },
+                    ensure_ascii=False,
+                )
+                + '\n'
+            )
         finally:
             if cursor:
                 try:
@@ -2203,8 +2279,9 @@ def descargar_documento_personal():
     except Exception as e:
         logging.exception('descargar_documento_personal')
         msg = _mensaje_error_descarga_drive(e)
+        code = _codigo_error_drive_para_soporte(e)
         if json_errors:
-            return jsonify({'error': msg}), 502
+            return jsonify({'error': msg, 'code': code}), 502
         flash(msg, 'error')
         return redirect(url_for('reporte_documentos_personal_page'))
 
