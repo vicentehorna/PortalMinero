@@ -425,7 +425,7 @@ class User(UserMixin):
             u.UserID,
             p.Name,
             p.email,
-            'Autónomo'
+            'Autónomo', c.Company
         FROM SY_User u
         INNER JOIN SY_Person p ON p.UserID = u.UserID
         INNER JOIN SY_Company c ON (p.Company = c.Company)
@@ -439,7 +439,7 @@ class User(UserMixin):
             u.UserID,
             p.Name,
             p.email,
-            'Autónomo'
+            'Autónomo', c.Company
         FROM SY_User u
         INNER JOIN SY_Person p ON p.UserID = u.UserID
         INNER JOIN PR_Employee E ON (p.Person = E.Person AND E.Status = 'N')
@@ -454,7 +454,7 @@ class User(UserMixin):
             u.UserID,
             p.Name,
             p.email,
-            'Autónomo'
+            'Autónomo', c.Company
         FROM SY_User u
         INNER JOIN SY_Person p ON p.UserID = u.UserID
         INNER JOIN SY_Company c ON (p.Company = c.Company)
@@ -468,7 +468,7 @@ class User(UserMixin):
             u.UserID,
             p.Name,
             p.email,
-            'Autónomo'
+            'Autónomo', c.Company
         FROM SY_User u
         INNER JOIN SY_Person p ON p.UserID = u.UserID
         INNER JOIN PR_Employee E ON (p.Person = E.Person AND E.Status = 'N')
@@ -500,6 +500,88 @@ class User(UserMixin):
         return cursor.fetchone() is not None
 
     @staticmethod
+    def _tiene_perfil_minero(cursor, userid):
+        """True si el usuario tiene perfil MINERO."""
+        cursor.execute(
+            """
+            SELECT 1
+            FROM SY_User u
+            INNER JOIN SY_UserProfile up ON u.UserID = up.UserID
+                AND up.Profile = 'MINERO'
+            WHERE u.UserID = ?
+            """,
+            (userid,),
+        )
+        return cursor.fetchone() is not None
+
+    @staticmethod
+    def get_minero_lock_company(userid):
+        """
+        Si el usuario tiene perfil MINERO, devuelve la compañía (misma lógica que el login:
+        GENERAL → compañía vía SY_Person/SY_Company; si no, empleado activo vía PR_Employee).
+        Si no es MINERO o no hay fila válida, devuelve None.
+        """
+        try:
+            conn = DatabaseConfig.get_connection()
+            cursor = conn.cursor()
+            if not User._tiene_perfil_minero(cursor, userid):
+                cursor.close()
+                conn.close()
+                return None
+            sql_general = """
+                SELECT TOP 1 c.Company
+                FROM SY_User u
+                INNER JOIN SY_UserProfile upm ON upm.UserID = u.UserID AND upm.Profile = 'MINERO'
+                INNER JOIN SY_Person p ON p.UserID = u.UserID
+                INNER JOIN SY_Company c ON (p.Company = c.Company)
+                INNER JOIN SY_UserProfile up ON up.UserID = u.UserID
+                INNER JOIN PR_mapping2 M ON (c.Company = M.company)
+                WHERE u.UserID = ?
+                """
+            sql_empleado = """
+                SELECT TOP 1 E.Company
+                FROM SY_User u
+                INNER JOIN SY_UserProfile upm ON upm.UserID = u.UserID AND upm.Profile = 'MINERO'
+                INNER JOIN SY_Person p ON p.UserID = u.UserID
+                INNER JOIN PR_Employee E ON (p.Person = E.Person AND E.Status = 'N')
+                INNER JOIN SY_Company c ON (E.Company = c.Company)
+                INNER JOIN SY_UserProfile up ON up.UserID = u.UserID
+                INNER JOIN PR_mapping2 M ON (c.Company = M.company)
+                WHERE u.UserID = ?
+                """
+            if User._tiene_perfil_general(cursor, userid):
+                cursor.execute(sql_general, (userid,))
+            else:
+                cursor.execute(sql_empleado, (userid,))
+            row = cursor.fetchone()
+            cursor.close()
+            conn.close()
+            if not row or row[0] is None:
+                return None
+            return str(row[0]).strip() or None
+        except Exception as e:
+            print(f"Error en get_minero_lock_company: {e}")
+            return None
+
+    @staticmethod
+    def usuario_omite_actualizacion_fechadescarga_descarga(userid):
+        """
+        True si el usuario tiene perfil GENERAL o MINERO: en descarga desde
+        Documentos del personal no se actualiza fechadescarga en DocumentosBoletas.
+        """
+        try:
+            conn = DatabaseConfig.get_connection()
+            cursor = conn.cursor()
+            gen = User._tiene_perfil_general(cursor, userid)
+            minero = User._tiene_perfil_minero(cursor, userid)
+            cursor.close()
+            conn.close()
+            return bool(gen or minero)
+        except Exception as e:
+            print(f"Error en usuario_omite_actualizacion_fechadescarga_descarga: {e}")
+            return False
+
+    @staticmethod
     def validate_user(username, password):
         """
         Valida las credenciales del usuario contra la base de datos.
@@ -524,7 +606,7 @@ class User(UserMixin):
             conn.close()
 
             if row:
-                user_id, username_db, email, nombre = row
+                user_id, username_db, email, nombre = row[0], row[1], row[2], row[3]
                 return User(user_id, username_db, email, nombre)
 
             return None
@@ -552,7 +634,7 @@ class User(UserMixin):
             conn.close()
 
             if row:
-                user_id_db, username, email, nombre = row
+                user_id_db, username, email, nombre = row[0], row[1], row[2], row[3]
                 return User(user_id_db, username, email, nombre)
 
             return None

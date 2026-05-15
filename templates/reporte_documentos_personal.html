@@ -107,20 +107,19 @@
         <form id="frmDocumentosPersonal" class="row g-2 g-lg-2 align-items-end">
             <div class="col-12 col-lg-3">
                 <label for="cboCompania" class="form-label small fw-bold text-muted">Compañía</label>
-                <select id="cboCompania" class="form-select form-select-sm" required>
+                <select id="cboCompania" class="form-select form-select-sm" required
+                    {% if minero_restringe_compania %}disabled title="Su perfil solo permite consultar esta compañía"{% endif %}>
+                    {% if minero_restringe_compania %}
+                    <option value="{{ minero_compania_codigo }}" selected>{{ minero_compania_text }}</option>
+                    {% else %}
                     <option value="">Seleccione...</option>
-                </select>
-            </div>
-            <div class="col-6 col-sm-4 col-lg-2">
-                <label for="cboTipoPlanilla" class="form-label small fw-bold text-muted">Tipo planilla</label>
-                <select id="cboTipoPlanilla" class="form-select form-select-sm" required disabled>
-                    <option value="">Seleccione...</option>
+                    {% endif %}
                 </select>
             </div>
             <div class="col-6 col-sm-4 col-lg-2">
                 <label for="cboPeriodo" class="form-label small fw-bold text-muted">Periodo</label>
                 <select id="cboPeriodo" class="form-select form-select-sm" required disabled>
-                    <option value="">Seleccione tipo de planilla...</option>
+                    <option value="">Seleccione compañía...</option>
                 </select>
             </div>
             <div class="col-12 col-sm-4 col-lg-3">
@@ -167,6 +166,8 @@ document.addEventListener('DOMContentLoaded', async function () {
         : null;
     const URL_REPORTE = {{ url_for('reporte_documentos_personal_post') | tojson }};
     const URL_DESCARGAR = {{ url_for('descargar_documento_personal') | tojson }};
+    const MINERO_RESTRINGE_COMPANIA = {{ (minero_restringe_compania or false) | tojson }};
+    const MINERO_COMPANIA_CODIGO = {{ (minero_compania_codigo or '') | tojson }};
     const IDX_STICKY_1 = 0;
     const IDX_STICKY_2 = 1;
     const IDX_CENTRO = new Set([2, 3, 4, 5]);
@@ -390,7 +391,6 @@ document.addEventListener('DOMContentLoaded', async function () {
 
         const metaRow1 = ws.addRow([
             'Compañía', meta.compania || '',
-            'Tipo planilla', meta.tipoPlanilla || '',
             'Periodo', meta.periodo || ''
         ]);
         metaRow1.eachCell({ includeEmpty: true }, (cell, colNumber) => {
@@ -530,14 +530,14 @@ document.addEventListener('DOMContentLoaded', async function () {
         }
     }
 
-    async function poblarPeriodos(cia, payrolltype, selectElement) {
+    async function poblarPeriodos(cia, selectElement) {
         selectElement.innerHTML = '';
         const loading = document.createElement('option');
         loading.value = '';
         loading.textContent = 'Cargando...';
         selectElement.appendChild(loading);
         try {
-            const res = await fetch(`/api/selectores/periodos-asig?cia=${encodeURIComponent(cia)}&payrolltype=${encodeURIComponent(payrolltype)}`);
+            const res = await fetch(`/api/selectores/periodos-asig?cia=${encodeURIComponent(cia)}`);
             const data = await res.json();
             selectElement.innerHTML = '';
             const optTodos = document.createElement('option');
@@ -565,7 +565,6 @@ document.addEventListener('DOMContentLoaded', async function () {
         document.getElementById('btnExportExcelDocs').disabled = true;
         if (filtrosPersist) filtrosPersist.guardar();
         const cia = document.getElementById('cboCompania').value.trim();
-        const payroll_type = document.getElementById('cboTipoPlanilla').value.trim();
         const period = document.getElementById('cboPeriodo').value.trim() || '0';
         let person = document.getElementById('cboTrabajador').value.trim();
         if (!person) person = '0';
@@ -576,7 +575,7 @@ document.addEventListener('DOMContentLoaded', async function () {
             const res = await fetch(URL_REPORTE, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ cia, payroll_type, period, person, tipodoc }),
+                body: JSON.stringify({ cia, period, person, tipodoc }),
             });
             const payload = await res.json();
             if (!res.ok || payload.error) {
@@ -598,7 +597,6 @@ document.addEventListener('DOMContentLoaded', async function () {
                 data: payload.data,
                 meta: {
                     compania: selectedText('cboCompania'),
-                    tipoPlanilla: selectedText('cboTipoPlanilla'),
                     periodo: selectedText('cboPeriodo'),
                     tipoDocumento: selectedText('cboTipoDocumento'),
                     empleado: selectedText('cboTrabajador'),
@@ -616,75 +614,70 @@ document.addEventListener('DOMContentLoaded', async function () {
 
     const DEFAULT_CIA = 'BGT';
     const cboCia = document.getElementById('cboCompania');
-    const cboPlanilla = document.getElementById('cboTipoPlanilla');
     const cboTrabajador = document.getElementById('cboTrabajador');
     const cboTipoDocumento = document.getElementById('cboTipoDocumento');
 
     await poblarTiposDocumento(cboTipoDocumento);
 
-    await poblarSelect('/api/selectores/companias', cboCia);
-    limpiarValorComboSiObsoleto(cboCia);
+    if (!MINERO_RESTRINGE_COMPANIA) {
+        await poblarSelect('/api/selectores/companias', cboCia);
+        limpiarValorComboSiObsoleto(cboCia);
 
-    const guardadoObj = filtrosPersist ? filtrosPersist.leer() : null;
-    const ciaGuardada = guardadoObj ? String(guardadoObj.cia || '').trim() : '';
-    if (filtrosPersist && ciaGuardada) {
-        await filtrosPersist.aplicarRestauracionCascada({
-            poblarSelect,
-            poblarPeriodoVacaciones: poblarPeriodos,
-        });
-        etiquetaTrabajadorTodosPorDefecto(cboTrabajador);
-    }
-
-    limpiarValorComboSiObsoleto(cboCia);
-    if (!String(cboCia.value || '').trim()) {
-        if (seleccionarCompaniaInsensitive(cboCia, DEFAULT_CIA)) {
-            const ciaNorm = cboCia.value.trim();
-            await poblarSelect(`/api/selectores/planillas?cia=${encodeURIComponent(ciaNorm)}`, cboPlanilla);
-            await poblarSelect(`/api/selectores/trabajadores?cia=${encodeURIComponent(ciaNorm)}`, cboTrabajador);
+        const guardadoObj = filtrosPersist ? filtrosPersist.leer() : null;
+        const ciaGuardada = guardadoObj ? String(guardadoObj.cia || '').trim() : '';
+        if (filtrosPersist && ciaGuardada) {
+            await filtrosPersist.aplicarRestauracionCascada({
+                poblarSelect,
+                poblarPeriodoVacaciones: poblarPeriodos,
+            });
             etiquetaTrabajadorTodosPorDefecto(cboTrabajador);
+        }
+
+        limpiarValorComboSiObsoleto(cboCia);
+        if (!String(cboCia.value || '').trim()) {
+            if (seleccionarCompaniaInsensitive(cboCia, DEFAULT_CIA)) {
+                const ciaNorm = cboCia.value.trim();
+                await poblarSelect(`/api/selectores/trabajadores?cia=${encodeURIComponent(ciaNorm)}`, cboTrabajador);
+                etiquetaTrabajadorTodosPorDefecto(cboTrabajador);
+                await poblarPeriodos(ciaNorm, document.getElementById('cboPeriodo'));
+            }
+        }
+    } else {
+        const ciaFix = String(MINERO_COMPANIA_CODIGO || '').trim();
+        if (ciaFix) {
+            await poblarSelect(`/api/selectores/trabajadores?cia=${encodeURIComponent(ciaFix)}`, cboTrabajador);
+            etiquetaTrabajadorTodosPorDefecto(cboTrabajador);
+            await poblarPeriodos(ciaFix, document.getElementById('cboPeriodo'));
         }
     }
 
     {
         const cia = cboCia.value.trim();
-        const pt = document.getElementById('cboTipoPlanilla').value.trim();
         const period = document.getElementById('cboPeriodo').value.trim();
-        if (cia && pt && period) {
+        if (cia && period) {
             await ejecutarConsulta();
         }
     }
 
-    document.getElementById('cboCompania').addEventListener('change', async function () {
-        const cia = this.value;
-        const cboPlanillaEl = document.getElementById('cboTipoPlanilla');
-        const cboTrabajadorEl = document.getElementById('cboTrabajador');
-        const cboPeriodo = document.getElementById('cboPeriodo');
-        cboPeriodo.innerHTML = '<option value="">Seleccione tipo de planilla...</option>';
-        cboPeriodo.disabled = true;
+    if (!MINERO_RESTRINGE_COMPANIA) {
+        document.getElementById('cboCompania').addEventListener('change', async function () {
+            const cia = this.value;
+            const cboTrabajadorEl = document.getElementById('cboTrabajador');
+            const cboPeriodo = document.getElementById('cboPeriodo');
+            cboPeriodo.innerHTML = '<option value="">Seleccione compañía...</option>';
+            cboPeriodo.disabled = true;
 
-        if (cia) {
-            await poblarSelect(`/api/selectores/planillas?cia=${encodeURIComponent(cia)}`, cboPlanillaEl);
-            await poblarSelect(`/api/selectores/trabajadores?cia=${encodeURIComponent(cia)}`, cboTrabajadorEl);
-            etiquetaTrabajadorTodosPorDefecto(cboTrabajadorEl);
-        } else {
-            cboPlanillaEl.innerHTML = '<option value="">Seleccione...</option>';
-            cboPlanillaEl.disabled = true;
-            cboTrabajadorEl.innerHTML = '<option value="">Seleccione...</option>';
-            cboTrabajadorEl.disabled = true;
-            etiquetaTrabajadorTodosPorDefecto(cboTrabajadorEl);
-        }
-    });
-
-    document.getElementById('cboTipoPlanilla').addEventListener('change', async function () {
-        const cia = document.getElementById('cboCompania').value;
-        const pt = this.value;
-        const cboPeriodo = document.getElementById('cboPeriodo');
-        cboPeriodo.innerHTML = '<option value="">Seleccione tipo de planilla...</option>';
-        cboPeriodo.disabled = true;
-        if (pt && cia) {
-            await poblarPeriodos(cia, pt, cboPeriodo);
-        }
-    });
+            if (cia) {
+                await poblarSelect(`/api/selectores/trabajadores?cia=${encodeURIComponent(cia)}`, cboTrabajadorEl);
+                etiquetaTrabajadorTodosPorDefecto(cboTrabajadorEl);
+                await poblarPeriodos(cia, cboPeriodo);
+            } else {
+                cboTrabajadorEl.innerHTML = '<option value="">Seleccione...</option>';
+                cboTrabajadorEl.disabled = true;
+                etiquetaTrabajadorTodosPorDefecto(cboTrabajadorEl);
+            }
+        });
+    }
 
     if (filtrosPersist) {
         filtrosPersist.registrarGuardadoEnCambio();

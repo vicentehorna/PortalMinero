@@ -69,8 +69,13 @@
         <form id="frmVacacionesDetalle" class="row g-3">
             <div class="col-md-3">
                 <label for="cboCompania" class="form-label small fw-bold text-muted">Compañía</label>
-                <select id="cboCompania" class="form-select form-select-sm" required>
+                <select id="cboCompania" class="form-select form-select-sm" required
+                    {% if minero_restringe_compania %}disabled title="Su perfil solo permite consultar esta compañía"{% endif %}>
+                    {% if minero_restringe_compania %}
+                    <option value="{{ minero_compania_codigo }}" selected>{{ minero_compania_text }}</option>
+                    {% else %}
                     <option value="">Seleccione...</option>
+                    {% endif %}
                 </select>
             </div>
             <div class="col-md-3">
@@ -123,6 +128,8 @@ document.addEventListener('DOMContentLoaded', async function () {
         : null;
 
     const URL_REPORTE = {{ url_for('reporte_vacaciones_detalle_post') | tojson }};
+    const MINERO_RESTRINGE_COMPANIA = {{ (minero_restringe_compania or false) | tojson }};
+    const MINERO_COMPANIA_CODIGO = {{ (minero_compania_codigo or '') | tojson }};
     /** Columnas fijas: índices sticky Código + Nombre (como planilla vertical). */
     const IDX_STICKY_1 = 1;
     const IDX_STICKY_2 = 2;
@@ -430,7 +437,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     };
 
     /** Periodos del reporte: primera opción «Todos» envía @period = '0' al SP. */
-    async function poblarPeriodosVacacionesDetalle(cia, payrolltype, selectElement) {
+    async function poblarPeriodosVacacionesDetalle(cia, selectElement) {
         selectElement.innerHTML = '';
         const loading = document.createElement('option');
         loading.value = '';
@@ -438,7 +445,7 @@ document.addEventListener('DOMContentLoaded', async function () {
         selectElement.appendChild(loading);
         try {
             const res = await fetch(
-                `/api/selectores/periodos-asig?cia=${encodeURIComponent(cia)}&payrolltype=${encodeURIComponent(payrolltype)}`
+                `/api/selectores/periodos-asig?cia=${encodeURIComponent(cia)}`
             );
             const data = await res.json();
             selectElement.innerHTML = '';
@@ -471,25 +478,34 @@ document.addEventListener('DOMContentLoaded', async function () {
     const cboPlanilla = document.getElementById('cboTipoPlanilla');
     const cboTrabajador = document.getElementById('cboTrabajador');
 
-    await poblarSelect('/api/selectores/companias', cboCia);
-    limpiarValorComboSiObsoleto(cboCia);
+    if (!MINERO_RESTRINGE_COMPANIA) {
+        await poblarSelect('/api/selectores/companias', cboCia);
+        limpiarValorComboSiObsoleto(cboCia);
 
-    const guardadoObj = filtrosPersist ? filtrosPersist.leer() : null;
-    const ciaGuardada = guardadoObj ? String(guardadoObj.cia || '').trim() : '';
-    if (filtrosPersist && ciaGuardada) {
-        await filtrosPersist.aplicarRestauracionCascada({
-            poblarSelect,
-            poblarPeriodoVacaciones: poblarPeriodosVacacionesDetalle
-        });
-        etiquetaTrabajadorTodosPorDefecto(cboTrabajador);
-    }
+        const guardadoObj = filtrosPersist ? filtrosPersist.leer() : null;
+        const ciaGuardada = guardadoObj ? String(guardadoObj.cia || '').trim() : '';
+        if (filtrosPersist && ciaGuardada) {
+            await filtrosPersist.aplicarRestauracionCascada({
+                poblarSelect,
+                poblarPeriodoVacaciones: poblarPeriodosVacacionesDetalle
+            });
+            etiquetaTrabajadorTodosPorDefecto(cboTrabajador);
+        }
 
-    limpiarValorComboSiObsoleto(cboCia);
-    if (!String(cboCia.value || '').trim()) {
-        if (seleccionarCompaniaInsensitive(cboCia, DEFAULT_CIA)) {
-            const ciaNorm = cboCia.value.trim();
-            await poblarSelect(`/api/selectores/planillas?cia=${encodeURIComponent(ciaNorm)}`, cboPlanilla);
-            await poblarSelect(`/api/selectores/trabajadores?cia=${encodeURIComponent(ciaNorm)}`, cboTrabajador);
+        limpiarValorComboSiObsoleto(cboCia);
+        if (!String(cboCia.value || '').trim()) {
+            if (seleccionarCompaniaInsensitive(cboCia, DEFAULT_CIA)) {
+                const ciaNorm = cboCia.value.trim();
+                await poblarSelect(`/api/selectores/planillas?cia=${encodeURIComponent(ciaNorm)}`, cboPlanilla);
+                await poblarSelect(`/api/selectores/trabajadores?cia=${encodeURIComponent(ciaNorm)}`, cboTrabajador);
+                etiquetaTrabajadorTodosPorDefecto(cboTrabajador);
+            }
+        }
+    } else {
+        const ciaFix = String(MINERO_COMPANIA_CODIGO || '').trim();
+        if (ciaFix) {
+            await poblarSelect(`/api/selectores/planillas?cia=${encodeURIComponent(ciaFix)}`, cboPlanilla);
+            await poblarSelect(`/api/selectores/trabajadores?cia=${encodeURIComponent(ciaFix)}`, cboTrabajador);
             etiquetaTrabajadorTodosPorDefecto(cboTrabajador);
         }
     }
@@ -503,27 +519,29 @@ document.addEventListener('DOMContentLoaded', async function () {
         }
     }
 
-    document.getElementById('cboCompania').addEventListener('change', async function () {
-        const cia = this.value;
-        const cboPlanilla = document.getElementById('cboTipoPlanilla');
-        const cboTrabajador = document.getElementById('cboTrabajador');
+    if (!MINERO_RESTRINGE_COMPANIA) {
+        document.getElementById('cboCompania').addEventListener('change', async function () {
+            const cia = this.value;
+            const cboPlanilla = document.getElementById('cboTipoPlanilla');
+            const cboTrabajador = document.getElementById('cboTrabajador');
 
-        document.getElementById('cboPeriodo').innerHTML =
-            '<option value="">Seleccione tipo de planilla...</option>';
-        document.getElementById('cboPeriodo').disabled = true;
+            document.getElementById('cboPeriodo').innerHTML =
+                '<option value="">Seleccione tipo de planilla...</option>';
+            document.getElementById('cboPeriodo').disabled = true;
 
-        if (cia) {
-            await poblarSelect(`/api/selectores/planillas?cia=${encodeURIComponent(cia)}`, cboPlanilla);
-            await poblarSelect(`/api/selectores/trabajadores?cia=${encodeURIComponent(cia)}`, cboTrabajador);
-            etiquetaTrabajadorTodosPorDefecto(cboTrabajador);
-        } else {
-            cboPlanilla.innerHTML = '<option value="">Seleccione...</option>';
-            cboPlanilla.disabled = true;
-            cboTrabajador.innerHTML = '<option value="">Seleccione...</option>';
-            cboTrabajador.disabled = true;
-            etiquetaTrabajadorTodosPorDefecto(cboTrabajador);
-        }
-    });
+            if (cia) {
+                await poblarSelect(`/api/selectores/planillas?cia=${encodeURIComponent(cia)}`, cboPlanilla);
+                await poblarSelect(`/api/selectores/trabajadores?cia=${encodeURIComponent(cia)}`, cboTrabajador);
+                etiquetaTrabajadorTodosPorDefecto(cboTrabajador);
+            } else {
+                cboPlanilla.innerHTML = '<option value="">Seleccione...</option>';
+                cboPlanilla.disabled = true;
+                cboTrabajador.innerHTML = '<option value="">Seleccione...</option>';
+                cboTrabajador.disabled = true;
+                etiquetaTrabajadorTodosPorDefecto(cboTrabajador);
+            }
+        });
+    }
 
     document.getElementById('cboTipoPlanilla').addEventListener('change', async function () {
         const cia = document.getElementById('cboCompania').value;
@@ -535,7 +553,7 @@ document.addEventListener('DOMContentLoaded', async function () {
         document.getElementById('cboPeriodo').disabled = true;
 
         if (pt && cia) {
-            await poblarPeriodosVacacionesDetalle(cia, pt, cboPeriodo);
+            await poblarPeriodosVacacionesDetalle(cia, cboPeriodo);
         }
     });
 

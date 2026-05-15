@@ -69,13 +69,83 @@ login_manager.login_message_category = 'info'
 
 
 def ensure_user_session():
-    """Asegura que company y person estén en sesión."""
+    """Asegura que company y person estén en sesión y actualiza alcance MINERO (una compañía)."""
+    if not current_user.is_authenticated:
+        return {'company': session.get('company'), 'person': session.get('person')}
     if not session.get('company') or not session.get('person'):
         info = get_datos_usuario_web(current_user.id)
         if info:
             session['company'], session['person'] = info['company'], info['person']
-            return info
-    return {'company': session.get('company'), 'person': session.get('person')}
+    _refresh_minero_scope_session()
+    return {
+        'company': session.get('company'),
+        'person': session.get('person'),
+        'minero_profile': session.get('minero_profile'),
+        'minero_lock_company': session.get('minero_lock_company'),
+    }
+
+
+def _refresh_minero_scope_session():
+    """Si el usuario tiene perfil MINERO y compañía resuelta, fija session['minero_lock_company']."""
+    if not current_user.is_authenticated:
+        return
+    uid = str(current_user.get_id())
+    if session.get('minero_scope_uid') == uid:
+        return
+    session['minero_scope_uid'] = uid
+    session.pop('minero_lock_company', None)
+    session['minero_profile'] = False
+    lock = User.get_minero_lock_company(current_user.id)
+    if lock:
+        session['minero_lock_company'] = str(lock).strip()
+        session['minero_profile'] = True
+
+
+def _minero_effective_company_lock():
+    """Código de compañía fija para usuarios MINERO, o None."""
+    if session.get('minero_profile') and session.get('minero_lock_company'):
+        return str(session['minero_lock_company']).strip()
+    return None
+
+
+def _descripcion_compania_selector(codigo):
+    """Texto del combo compañías (sp_pr_selectorcompanias_web) para un código dado."""
+    codigo = str(codigo or '').strip()
+    if not codigo:
+        return ''
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('EXEC sp_pr_selectorcompanias_web')
+        rows = cursor.fetchall()
+        for r in rows:
+            if str(getattr(r, 'Company', r[0])).strip() == codigo:
+                desc = getattr(r, 'description', None)
+                if desc is None and len(r) > 1:
+                    desc = r[1]
+                return str(desc).strip() if desc is not None else codigo
+    except Exception:
+        logging.exception('_descripcion_compania_selector')
+        return codigo
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    return codigo
+
+
+def _minero_reporte_template_context():
+    """Contexto Jinja común para reportes con compañía fija (perfil MINERO)."""
+    ensure_user_session()
+    lock = _minero_effective_company_lock()
+    return {
+        'minero_restringe_compania': bool(lock),
+        'minero_compania_codigo': lock or '',
+        'minero_compania_text': _descripcion_compania_selector(lock) if lock else '',
+    }
 
 
 @app.template_filter('importe')
@@ -1176,19 +1246,19 @@ def reporte_planilla_vertical_page():
 @app.route('/reporte-vacaciones-detalle')
 @login_required
 def reporte_vacaciones_detalle_page():
-    return render_template('reporte_vacaciones_detalle.html')
+    return render_template('reporte_vacaciones_detalle.html', **_minero_reporte_template_context())
 
 
 @app.route('/reporte-saldo-vacaciones')
 @login_required
 def reporte_saldo_vacaciones_page():
-    return render_template('reporte_saldo_vacaciones.html')
+    return render_template('reporte_saldo_vacaciones.html', **_minero_reporte_template_context())
 
 
 @app.route('/reporte-documentos-personal')
 @login_required
 def reporte_documentos_personal_page():
-    return render_template('reporte_documentos_personal.html')
+    return render_template('reporte_documentos_personal.html', **_minero_reporte_template_context())
 
 
 @app.route('/reporte-descansos-medicos-detalle')
@@ -1535,7 +1605,11 @@ def api_companias():
 @login_required
 def api_planillas():
     """sp_pr_selectorplanillas_web @cia → payrolltype, tipoplanilla"""
+    ensure_user_session()
+    lock = _minero_effective_company_lock()
     cia = request.args.get('cia')
+    if lock and (not cia or str(cia).strip() != lock):
+        return jsonify([])
     if not cia:
         return jsonify([])
     conn = None
@@ -1621,18 +1695,21 @@ def api_periodos():
 @app.route('/api/selectores/periodos-asig')
 @login_required
 def api_periodos_asig():
-    """sp_pr_selectorperiodos_asig_web @cia, @payrolltype → PRPERIOD (id), description (text)."""
+    """sp_pr_selectorperiodos_asig_web @cia → PRPERIOD (id), description (text)."""
+    ensure_user_session()
+    lock = _minero_effective_company_lock()
     cia = request.args.get('cia')
-    payrolltype = request.args.get('payrolltype')
-    if not cia or not payrolltype:
+    if lock and (not cia or str(cia).strip() != lock):
+        return jsonify([])
+    if not cia:
         return jsonify([])
     conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
-            "EXEC sp_pr_selectorperiodos_asig_web @cia=?, @payrolltype=?",
-            (cia, payrolltype),
+            "EXEC sp_pr_selectorperiodos_asig_web @cia=?",
+            (cia,),
         )
         desc = cursor.description
         rows = cursor.fetchall()
@@ -1696,7 +1773,11 @@ def api_unidades():
 @login_required
 def api_trabajadores():
     """sp_pr_selectorpersonas_web @cia → Person, Name"""
+    ensure_user_session()
+    lock = _minero_effective_company_lock()
     cia = request.args.get('cia')
+    if lock and (not cia or str(cia).strip() != lock):
+        return jsonify([])
     if not cia:
         return jsonify([])
     conn = None
@@ -2126,8 +2207,12 @@ def reporte_planilla_vertical_post():
 @login_required
 def reporte_vacaciones_detalle_post():
     """sp_pr_r019_vacationdetail_web @cia, @payrolltype, @period, @person."""
+    ensure_user_session()
+    lock = _minero_effective_company_lock()
     body = request.get_json(silent=True) or {}
     cia = str(body.get('cia') or '').strip()
+    if lock:
+        cia = lock
     payroll_type = str(body.get('payroll_type') or body.get('payrolltype') or '').strip()
     period_raw = body.get('period')
     ps = str(period_raw).strip() if period_raw is not None else ''
@@ -2191,10 +2276,13 @@ def reporte_vacaciones_detalle_post():
 @app.route('/reporte_documentos_personal', methods=['POST'])
 @login_required
 def reporte_documentos_personal_post():
-    """sp_pr_reportenotificaciones_web @cia, @period, @payrolltype, @tipodoc, @person."""
+    """sp_pr_reportenotificaciones_web @cia, @period, @tipodoc, @person."""
+    ensure_user_session()
+    lock = _minero_effective_company_lock()
     body = request.get_json(silent=True) or {}
     cia = str(body.get('cia') or '').strip()
-    payroll_type = str(body.get('payroll_type') or body.get('payrolltype') or '').strip()
+    if lock:
+        cia = lock
     period_raw = body.get('period')
     ps = str(period_raw).strip() if period_raw is not None else ''
     period = '0' if ps == '' or ps == '0' else _normalize_pr_period(period_raw)
@@ -2203,8 +2291,6 @@ def reporte_documentos_personal_post():
 
     if not cia:
         return jsonify({"error": "Seleccione una compañía."}), 400
-    if not payroll_type:
-        return jsonify({"error": "Debe indicar tipo de planilla."}), 400
 
     headers_es = [
         'Código',
@@ -2220,8 +2306,8 @@ def reporte_documentos_personal_post():
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
-            "EXEC sp_pr_reportenotificaciones_web @cia=?, @period=?, @payrolltype=?, @tipodoc=?, @person=?",
-            (cia, period, payroll_type, tipodoc, person),
+            "EXEC sp_pr_reportenotificaciones_web @cia=?, @period=?, @tipodoc=?, @person=?",
+            (cia, period, tipodoc, person),
         )
         rows = _dicts_first_nonempty_resultset(cursor)
         resultado = []
@@ -2261,11 +2347,15 @@ def reporte_documentos_personal_post():
 @app.route('/documentos-personal/descargar')
 @login_required
 def descargar_documento_personal():
+    ensure_user_session()
+    lock = _minero_effective_company_lock()
     drive_id = str(request.args.get('file_id') or '').strip()
     person = str(request.args.get('person') or '').strip()
     period = str(request.args.get('period') or '').strip()
     tipodocumento = str(request.args.get('tipodocumento') or '').strip()
     cia = str(request.args.get('cia') or '').strip() or str(session.get('company') or '').strip()
+    if lock:
+        cia = lock
     json_errors = _descarga_personal_es_fetch()
 
     if not drive_id:
@@ -2286,9 +2376,10 @@ def descargar_documento_personal():
         return redirect(url_for('reporte_documentos_personal_page'))
 
     if cia and person and period and tipodocumento:
-        ok = actualizar_fechadescarga_boleta(cia, person, tipodocumento, period)
-        if not ok:
-            flash('No se pudo actualizar la fecha de descarga en DocumentosBoletas.', 'error')
+        if not User.usuario_omite_actualizacion_fechadescarga_descarga(current_user.id):
+            ok = actualizar_fechadescarga_boleta(cia, person, tipodocumento, period)
+            if not ok:
+                flash('No se pudo actualizar la fecha de descarga en DocumentosBoletas.', 'error')
 
     return send_file(
         archivo_io,
@@ -2319,8 +2410,12 @@ def _parse_fecha_reporte_saldo(raw):
 @login_required
 def reporte_saldo_vacaciones_post():
     """sp_pr_reportesaldos_total_web @company, @payrolltype, @person, @date, @cesados."""
+    ensure_user_session()
+    lock = _minero_effective_company_lock()
     body = request.get_json(silent=True) or {}
     cia = str(body.get('cia') or '').strip()
+    if lock:
+        cia = lock
     payroll_type = str(body.get('payroll_type') or body.get('payrolltype') or '').strip()
     person = str(body.get('person') or '0').strip() or '0'
     fecha_corte = _parse_fecha_reporte_saldo(body.get('date') or body.get('fecha'))

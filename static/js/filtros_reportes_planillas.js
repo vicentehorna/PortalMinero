@@ -246,26 +246,28 @@
             const cboCia = document.getElementById('cboCompania');
             const cboPt = document.getElementById('cboTipoPlanilla');
             const cboPer = document.getElementById('cboPeriodo');
-            if (!cboCia || !cboPt || !cboPer) return false;
+            if (!cboCia || !cboPer) return false;
 
             const cia = String(filtros.cia).trim();
             if (!optionExists(cboCia, cia)) return false;
             cboCia.value = cia;
 
-            await poblarSelect(`/api/selectores/planillas?cia=${encodeURIComponent(cia)}`, cboPt);
+            if (cboPt) {
+                await poblarSelect(`/api/selectores/planillas?cia=${encodeURIComponent(cia)}`, cboPt);
 
-            const payroll = filtros.payroll != null ? String(filtros.payroll).trim() : '';
-            if (!payroll || !optionExists(cboPt, payroll)) {
-                guardar();
-                return true;
+                const payroll = filtros.payroll != null ? String(filtros.payroll).trim() : '';
+                if (!payroll || !optionExists(cboPt, payroll)) {
+                    guardar();
+                    return true;
+                }
+                cboPt.value = payroll;
             }
-            cboPt.value = payroll;
 
             if (typeof poblarPeriodoVacaciones === 'function') {
-                await poblarPeriodoVacaciones(cia, payroll, cboPer);
+                await poblarPeriodoVacaciones(cia, cboPer);
             } else {
                 await poblarSelect(
-                    `/api/selectores/periodos-asig?cia=${encodeURIComponent(cia)}&payrolltype=${encodeURIComponent(payroll)}`,
+                    `/api/selectores/periodos-asig?cia=${encodeURIComponent(cia)}`,
                     cboPer
                 );
             }
@@ -478,10 +480,10 @@
             cboPt.value = payroll;
 
             if (typeof poblarPeriodoVacaciones === 'function') {
-                await poblarPeriodoVacaciones(cia, payroll, cboPer);
+                await poblarPeriodoVacaciones(cia, cboPer);
             } else {
                 await poblarSelect(
-                    `/api/selectores/periodos-asig?cia=${encodeURIComponent(cia)}&payrolltype=${encodeURIComponent(payroll)}`,
+                    `/api/selectores/periodos-asig?cia=${encodeURIComponent(cia)}`,
                     cboPer
                 );
             }

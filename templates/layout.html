@@ -113,12 +113,6 @@
                     <p class="sidebar-section-title px-3 mt-4 mb-0 text-uppercase fw-bold opacity-50">Configuración</p>
                 </li>
 
-                <li class="{{ 'active' if request.endpoint == 'mapeo_general' else '' }}">
-                    <a href="#" aria-disabled="true">
-                        <i class="bi bi-diagram-3"></i> Mapeo General
-                    </a>
-                </li>
-
                 <li class="{{ 'active' if request.endpoint == 'configuracion_usuario' else '' }}">
                     <a href="{{ url_for('configuracion_usuario') }}">
                         <i class="bi bi-person-gear"></i> Configuración por usuario
