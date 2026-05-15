@@ -515,6 +515,60 @@ class User(UserMixin):
         return cursor.fetchone() is not None
 
     @staticmethod
+    def _tiene_perfil_simple(cursor, userid):
+        """True si el usuario tiene perfil SIMPLE."""
+        cursor.execute(
+            """
+            SELECT 1
+            FROM SY_User u
+            INNER JOIN SY_UserProfile up ON u.UserID = up.UserID
+                AND up.Profile = 'SIMPLE'
+            WHERE u.UserID = ?
+            """,
+            (userid,),
+        )
+        return cursor.fetchone() is not None
+
+    @staticmethod
+    def get_simple_documentos_scope(userid):
+        """
+        Si el usuario tiene perfil SIMPLE, devuelve compañía, código de persona y nombre
+        para fijar filtros en Documentos del personal.
+        """
+        try:
+            conn = DatabaseConfig.get_connection()
+            cursor = conn.cursor()
+            if not User._tiene_perfil_simple(cursor, userid):
+                cursor.close()
+                conn.close()
+                return None
+            sql_empleado = """
+                SELECT TOP 1 E.Company, p.Person, p.Name
+                FROM SY_User u
+                INNER JOIN SY_UserProfile ups ON ups.UserID = u.UserID AND ups.Profile = 'SIMPLE'
+                INNER JOIN SY_Person p ON p.UserID = u.UserID
+                INNER JOIN PR_Employee E ON (p.Person = E.Person AND E.Status = 'N')
+                INNER JOIN SY_Company c ON (E.Company = c.Company)
+                INNER JOIN PR_mapping2 M ON (c.Company = M.company)
+                WHERE u.UserID = ?
+                """
+            cursor.execute(sql_empleado, (userid,))
+            row = cursor.fetchone()
+            cursor.close()
+            conn.close()
+            if not row or row[0] is None or row[1] is None:
+                return None
+            company = str(row[0]).strip()
+            person = str(row[1]).strip()
+            name = str(row[2]).strip() if row[2] is not None else person
+            if not company or not person:
+                return None
+            return {'company': company, 'person': person, 'person_name': name}
+        except Exception as e:
+            print(f"Error en get_simple_documentos_scope: {e}")
+            return None
+
+    @staticmethod
     def get_minero_lock_company(userid):
         """
         Si el usuario tiene perfil MINERO, devuelve la compañía (misma lógica que el login:
@@ -566,8 +620,11 @@ class User(UserMixin):
     @staticmethod
     def usuario_omite_actualizacion_fechadescarga_descarga(userid):
         """
-        True si el usuario tiene perfil GENERAL o MINERO: en descarga desde
-        Documentos del personal no se actualiza fechadescarga en DocumentosBoletas.
+        True solo para GENERAL o MINERO: no actualizar fechadescarga al descargar
+        en Documentos del personal.
+
+        Perfil SIMPLE y cualquier otro sí actualizan fechadescarga (comportamiento
+        de empleado que descarga su documento).
         """
         try:
             conn = DatabaseConfig.get_connection()

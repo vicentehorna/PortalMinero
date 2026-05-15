@@ -212,10 +212,8 @@
             try {
                 const estado = {
                     cia: val('cboCompania'),
-                    payroll: val('cboTipoPlanilla'),
                     periodo: val('cboPeriodo'),
                     person: val('cboTrabajador'),
-                    tipodoc: val('cboTipoDocumento'),
                     timestamp: Date.now()
                 };
                 localStorage.setItem(STORAGE_KEY_VACACIONES_DETALLE, JSON.stringify(estado));
@@ -244,24 +242,12 @@
             if (!filtros || !filtros.cia) return false;
 
             const cboCia = document.getElementById('cboCompania');
-            const cboPt = document.getElementById('cboTipoPlanilla');
             const cboPer = document.getElementById('cboPeriodo');
             if (!cboCia || !cboPer) return false;
 
             const cia = String(filtros.cia).trim();
             if (!optionExists(cboCia, cia)) return false;
             cboCia.value = cia;
-
-            if (cboPt) {
-                await poblarSelect(`/api/selectores/planillas?cia=${encodeURIComponent(cia)}`, cboPt);
-
-                const payroll = filtros.payroll != null ? String(filtros.payroll).trim() : '';
-                if (!payroll || !optionExists(cboPt, payroll)) {
-                    guardar();
-                    return true;
-                }
-                cboPt.value = payroll;
-            }
 
             if (typeof poblarPeriodoVacaciones === 'function') {
                 await poblarPeriodoVacaciones(cia, cboPer);
@@ -288,20 +274,12 @@
                 }
             }
 
-            const cboTipoDoc = document.getElementById('cboTipoDocumento');
-            if (cboTipoDoc && filtros.tipodoc != null && String(filtros.tipodoc).trim() !== '') {
-                const td = String(filtros.tipodoc).trim();
-                if (optionExists(cboTipoDoc, td)) {
-                    cboTipoDoc.value = td;
-                }
-            }
-
             guardar();
             return true;
         }
 
         function registrarGuardadoEnCambio() {
-            ['cboCompania', 'cboTipoPlanilla', 'cboPeriodo', 'cboTrabajador', 'cboTipoDocumento'].forEach((id) => {
+            ['cboCompania', 'cboPeriodo', 'cboTrabajador'].forEach((id) => {
                 const el = document.getElementById(id);
                 if (el) el.addEventListener('change', guardar);
             });
@@ -321,7 +299,6 @@
             try {
                 const estado = {
                     cia: val('cboCompania'),
-                    payroll: val('cboTipoPlanilla'),
                     fecha: val('inpFechaCorte'),
                     cesados: val('cboCesadosSaldo'),
                     person: val('cboTrabajador'),
@@ -353,23 +330,13 @@
             if (!filtros || !filtros.cia) return false;
 
             const cboCia = document.getElementById('cboCompania');
-            const cboPt = document.getElementById('cboTipoPlanilla');
             const cboTra = document.getElementById('cboTrabajador');
             const inpFecha = document.getElementById('inpFechaCorte');
-            if (!cboCia || !cboPt) return false;
+            if (!cboCia) return false;
 
             const cia = String(filtros.cia).trim();
             if (!optionExists(cboCia, cia)) return false;
             cboCia.value = cia;
-
-            await poblarSelect(`/api/selectores/planillas?cia=${encodeURIComponent(cia)}`, cboPt);
-
-            const payroll = filtros.payroll != null ? String(filtros.payroll).trim() : '';
-            if (!payroll || !optionExists(cboPt, payroll)) {
-                guardar();
-                return true;
-            }
-            cboPt.value = payroll;
 
             if (cboTra) {
                 await poblarSelect(`/api/selectores/trabajadores?cia=${encodeURIComponent(cia)}`, cboTra);
@@ -399,7 +366,7 @@
         }
 
         function registrarGuardadoEnCambio() {
-            ['cboCompania', 'cboTipoPlanilla', 'cboTrabajador', 'inpFechaCorte', 'cboCesadosSaldo'].forEach((id) => {
+            ['cboCompania', 'cboTrabajador', 'inpFechaCorte', 'cboCesadosSaldo'].forEach((id) => {
                 const el = document.getElementById(id);
                 if (el) el.addEventListener('change', guardar);
             });

@@ -77,10 +77,10 @@
     </div>
     <div class="card-body">
         <form id="frmSaldoVacaciones" class="row g-3">
-            <div class="col-6 col-md-2 col-lg-2">
+            <div class="col-12 col-md-4 col-lg-3">
                 <label for="cboCompania" class="form-label small fw-bold text-muted">Compañía</label>
                 <select id="cboCompania" class="form-select form-select-sm" required
-                    {% if minero_restringe_compania %}disabled title="Su perfil solo permite consultar esta compañía"{% endif %}>
+                    {% if minero_restringe_compania %}disabled title="Su perfil solo permite consultar su compañía"{% endif %}>
                     {% if minero_restringe_compania %}
                     <option value="{{ minero_compania_codigo }}" selected>{{ minero_compania_text }}</option>
                     {% else %}
@@ -88,13 +88,7 @@
                     {% endif %}
                 </select>
             </div>
-            <div class="col-6 col-md-2 col-lg-2">
-                <label for="cboTipoPlanilla" class="form-label small fw-bold text-muted">Tipo planilla</label>
-                <select id="cboTipoPlanilla" class="form-select form-select-sm" required disabled>
-                    <option value="">Seleccione...</option>
-                </select>
-            </div>
-            <div class="col-6 col-md-2 col-lg-2">
+            <div class="col-6 col-md-3 col-lg-2">
                 <label for="inpFechaCorte" class="form-label small fw-bold text-muted">Fecha de corte</label>
                 <input type="date" id="inpFechaCorte" class="form-control form-control-sm" required
                        style="max-width: 11rem;"
@@ -108,10 +102,17 @@
                     <option value="N">No</option>
                 </select>
             </div>
-            <div class="col-12 col-md-4 col-lg-4">
-                <label for="cboTrabajador" class="form-label small fw-bold text-muted">Empleado <span class="fw-normal opacity-75">(opcional)</span></label>
-                <select id="cboTrabajador" class="form-select form-select-sm" disabled>
+            <div class="col-12 col-md-5 col-lg-5">
+                <label for="cboTrabajador" class="form-label small fw-bold text-muted">Empleado
+                    {% if not simple_restringe_trabajador %}<span class="fw-normal opacity-75">(opcional)</span>{% endif %}
+                </label>
+                <select id="cboTrabajador" class="form-select form-select-sm"
+                    {% if simple_restringe_trabajador %}disabled title="Su perfil solo permite consultar su saldo de vacaciones"{% else %}disabled{% endif %}>
+                    {% if simple_restringe_trabajador %}
+                    <option value="{{ simple_trabajador_codigo }}" selected>{{ simple_trabajador_nombre }}</option>
+                    {% else %}
                     <option value="">Todos (por defecto)</option>
+                    {% endif %}
                 </select>
             </div>
             <div class="col-12 d-flex align-items-center flex-wrap gap-2 border-top pt-3 mt-3">
@@ -146,8 +147,10 @@ document.addEventListener('DOMContentLoaded', async function () {
         : null;
 
     const URL_REPORTE = {{ url_for('reporte_saldo_vacaciones_post') | tojson }};
-    const MINERO_RESTRINGE_COMPANIA = {{ (minero_restringe_compania or false) | tojson }};
-    const MINERO_COMPANIA_CODIGO = {{ (minero_compania_codigo or '') | tojson }};
+    const RESTRINGE_COMPANIA = {{ (minero_restringe_compania or false) | tojson }};
+    const COMPANIA_CODIGO = {{ (minero_compania_codigo or '') | tojson }};
+    const SIMPLE_RESTRINGE_TRABAJADOR = {{ (simple_restringe_trabajador or false) | tojson }};
+    const SIMPLE_TRABAJADOR_CODIGO = {{ (simple_trabajador_codigo or '') | tojson }};
     /** Sticky: Código + Nombre (índices 0 y 1). */
     const IDX_STICKY_1 = 0;
     const IDX_STICKY_2 = 1;
@@ -321,13 +324,12 @@ document.addEventListener('DOMContentLoaded', async function () {
 
         const metaRow = ws.addRow([
             'Compañía', meta.compania || '',
-            'Tipo planilla', meta.tipoPlanilla || '',
             'Fecha corte', meta.fechaCorte || '',
             'Cesados', meta.cesados || '',
             'Empleado', meta.empleado || ''
         ]);
         metaRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-            if (colNumber <= 10) {
+            if (colNumber <= 8) {
                 cell.fill = fill(F.meta);
                 cell.font = { bold: colNumber % 2 === 1 };
                 cell.alignment = alignCenter;
@@ -410,17 +412,20 @@ document.addEventListener('DOMContentLoaded', async function () {
         document.getElementById('btnExportExcelSaldoVac').disabled = true;
         if (filtrosPersist) filtrosPersist.guardar();
         const cia = document.getElementById('cboCompania').value.trim();
-        const payroll_type = document.getElementById('cboTipoPlanilla').value.trim();
         const date = document.getElementById('inpFechaCorte').value.trim();
         const cesados = (document.getElementById('cboCesadosSaldo') || {}).value || 'T';
         let person = document.getElementById('cboTrabajador').value.trim();
-        if (!person) person = '0';
+        if (SIMPLE_RESTRINGE_TRABAJADOR && SIMPLE_TRABAJADOR_CODIGO) {
+            person = SIMPLE_TRABAJADOR_CODIGO;
+        } else if (!person) {
+            person = '0';
+        }
 
         try {
             const res = await fetch(URL_REPORTE, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ cia, payroll_type, date, person, cesados })
+                body: JSON.stringify({ cia, date, person, cesados })
             });
             const payload = await res.json();
             if (!res.ok) {
@@ -448,7 +453,6 @@ document.addEventListener('DOMContentLoaded', async function () {
                 data: payload.data,
                 meta: {
                     compania: selectedText('cboCompania'),
-                    tipoPlanilla: selectedText('cboTipoPlanilla'),
                     fechaCorte: fechaCorteTexto(),
                     cesados: selectedText('cboCesadosSaldo'),
                     empleado: selectedText('cboTrabajador') || 'Todos'
@@ -493,10 +497,34 @@ document.addEventListener('DOMContentLoaded', async function () {
 
     const DEFAULT_CIA = 'BGT';
     const cboCia = document.getElementById('cboCompania');
-    const cboPlanilla = document.getElementById('cboTipoPlanilla');
     const cboTrabajador = document.getElementById('cboTrabajador');
 
-    if (!MINERO_RESTRINGE_COMPANIA) {
+    async function cargarTrabajadoresSaldo(cia) {
+        if (!cia || SIMPLE_RESTRINGE_TRABAJADOR) return;
+        await poblarSelect(`/api/selectores/trabajadores?cia=${encodeURIComponent(cia)}`, cboTrabajador);
+        etiquetaTrabajadorTodosPorDefecto(cboTrabajador);
+    }
+
+    function aplicarFiltrosGuardadosSaldo(guardadoObj) {
+        if (!guardadoObj) return;
+        const fGuard = guardadoObj.fecha != null ? String(guardadoObj.fecha).trim() : '';
+        if (fGuard && /^\d{4}-\d{2}-\d{2}$/.test(fGuard)) {
+            document.getElementById('inpFechaCorte').value = fGuard;
+        }
+        const cCes = document.getElementById('cboCesadosSaldo');
+        if (cCes && guardadoObj.cesados != null) {
+            const cv = String(guardadoObj.cesados).trim().toUpperCase();
+            if (['T', 'Y', 'N'].includes(cv)) cCes.value = cv;
+        }
+        if (!SIMPLE_RESTRINGE_TRABAJADOR && cboTrabajador) {
+            const person = guardadoObj.person != null ? String(guardadoObj.person).trim() : '';
+            if (person && optionExists(cboTrabajador, person)) {
+                cboTrabajador.value = person;
+            }
+        }
+    }
+
+    if (!RESTRINGE_COMPANIA) {
         await poblarSelect('/api/selectores/companias', cboCia);
         limpiarValorComboSiObsoleto(cboCia);
 
@@ -504,58 +532,44 @@ document.addEventListener('DOMContentLoaded', async function () {
         const ciaGuardada = guardadoObj ? String(guardadoObj.cia || '').trim() : '';
         if (filtrosPersist && ciaGuardada) {
             await filtrosPersist.aplicarRestauracionCascada({ poblarSelect });
-            etiquetaTrabajadorTodosPorDefecto(cboTrabajador);
-            const fGuard = guardadoObj.fecha != null ? String(guardadoObj.fecha).trim() : '';
-            if (fGuard && /^\d{4}-\d{2}-\d{2}$/.test(fGuard)) {
-                document.getElementById('inpFechaCorte').value = fGuard;
-            }
-            const cCes = document.getElementById('cboCesadosSaldo');
-            if (cCes && guardadoObj.cesados != null) {
-                const cv = String(guardadoObj.cesados).trim().toUpperCase();
-                if (['T', 'Y', 'N'].includes(cv)) cCes.value = cv;
-            }
         }
 
         limpiarValorComboSiObsoleto(cboCia);
         if (!String(cboCia.value || '').trim()) {
             if (seleccionarCompaniaInsensitive(cboCia, DEFAULT_CIA)) {
-                const ciaNorm = cboCia.value.trim();
-                await poblarSelect(`/api/selectores/planillas?cia=${encodeURIComponent(ciaNorm)}`, cboPlanilla);
-                await poblarSelect(`/api/selectores/trabajadores?cia=${encodeURIComponent(ciaNorm)}`, cboTrabajador);
-                etiquetaTrabajadorTodosPorDefecto(cboTrabajador);
+                await cargarTrabajadoresSaldo(cboCia.value.trim());
             }
+        } else {
+            await cargarTrabajadoresSaldo(cboCia.value.trim());
         }
+        aplicarFiltrosGuardadosSaldo(guardadoObj);
     } else {
-        const ciaFix = String(MINERO_COMPANIA_CODIGO || '').trim();
+        const ciaFix = String(COMPANIA_CODIGO || '').trim();
         if (ciaFix) {
-            await poblarSelect(`/api/selectores/planillas?cia=${encodeURIComponent(ciaFix)}`, cboPlanilla);
-            await poblarSelect(`/api/selectores/trabajadores?cia=${encodeURIComponent(ciaFix)}`, cboTrabajador);
-            etiquetaTrabajadorTodosPorDefecto(cboTrabajador);
+            await cargarTrabajadoresSaldo(ciaFix);
         }
+        const guardadoObj = filtrosPersist ? filtrosPersist.leer() : null;
+        aplicarFiltrosGuardadosSaldo(guardadoObj);
     }
 
     {
         const cia = cboCia.value.trim();
-        const pt = document.getElementById('cboTipoPlanilla').value.trim();
         const date = document.getElementById('inpFechaCorte').value.trim();
-        if (cia && pt && date) {
+        const personOk = SIMPLE_RESTRINGE_TRABAJADOR ? Boolean(SIMPLE_TRABAJADOR_CODIGO) : true;
+        if (cia && date && personOk) {
             await ejecutarConsultaSaldoVacaciones();
         }
     }
 
-    if (!MINERO_RESTRINGE_COMPANIA) {
+    if (!RESTRINGE_COMPANIA) {
         document.getElementById('cboCompania').addEventListener('change', async function () {
             const cia = this.value;
-            const cboPlanillaEl = document.getElementById('cboTipoPlanilla');
             const cboTrabajadorEl = document.getElementById('cboTrabajador');
 
             if (cia) {
-                await poblarSelect(`/api/selectores/planillas?cia=${encodeURIComponent(cia)}`, cboPlanillaEl);
                 await poblarSelect(`/api/selectores/trabajadores?cia=${encodeURIComponent(cia)}`, cboTrabajadorEl);
                 etiquetaTrabajadorTodosPorDefecto(cboTrabajadorEl);
             } else {
-                cboPlanillaEl.innerHTML = '<option value="">Seleccione...</option>';
-                cboPlanillaEl.disabled = true;
                 cboTrabajadorEl.innerHTML = '<option value="">Seleccione...</option>';
                 cboTrabajadorEl.disabled = true;
                 etiquetaTrabajadorTodosPorDefecto(cboTrabajadorEl);
