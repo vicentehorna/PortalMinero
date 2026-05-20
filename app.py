@@ -40,6 +40,7 @@ except Exception as _weasy_err:
 from database import (
     User,
     get_datos_usuario_web,
+    get_logoweb_empresa,
     cambiar_password,
     get_db_connection,
     get_config_empresa,
@@ -67,6 +68,53 @@ login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 login_manager.login_message_category = 'info'
 
+LOGO_EMPRESA_DEFAULT = 'logo_default.jpg'
+LOGOS_EMPRESA_DIR = os.path.join('static', 'img', 'logos')
+
+
+def _company_for_logo_session():
+    """Compañía efectiva para branding (respeta bloqueos MINERO/SIMPLE)."""
+    if session.get('simple_profile') and session.get('simple_lock_company'):
+        return str(session['simple_lock_company']).strip()
+    if session.get('minero_profile') and session.get('minero_lock_company'):
+        return str(session['minero_lock_company']).strip()
+    return str(session.get('company') or '').strip()
+
+
+def _sync_session_logoweb():
+    """Persiste en sesión el nombre de archivo logoweb de la compañía del usuario."""
+    cia = _company_for_logo_session()
+    if not cia:
+        session.pop('logoweb', None)
+        return
+    session['logoweb'] = get_logoweb_empresa(cia) or ''
+
+
+def _resolver_logo_empresa_url():
+    """URL estática del logo de la empresa (o logo por defecto si no existe el archivo)."""
+    filename = ''
+    if has_request_context() and current_user.is_authenticated:
+        ensure_user_session()
+        filename = str(session.get('logoweb') or '').strip()
+        if not filename:
+            cia = _company_for_logo_session()
+            if not cia:
+                cia = User.get_minero_lock_company(current_user.id) or ''
+            if cia:
+                filename = (get_logoweb_empresa(cia) or '').strip()
+                session['logoweb'] = filename
+
+    logos_root = os.path.join(app.root_path, LOGOS_EMPRESA_DIR)
+    candidates = []
+    if filename:
+        candidates.append(filename)
+    candidates.append(LOGO_EMPRESA_DEFAULT)
+
+    for name in candidates:
+        if name and os.path.isfile(os.path.join(logos_root, name)):
+            return url_for('static', filename=f'img/logos/{name}')
+    return url_for('static', filename=f'img/logos/{LOGO_EMPRESA_DEFAULT}')
+
 
 def ensure_user_session():
     """Asegura que company y person estén en sesión y actualiza alcance MINERO/SIMPLE (documentos)."""
@@ -76,7 +124,10 @@ def ensure_user_session():
         info = get_datos_usuario_web(current_user.id)
         if info:
             session['company'], session['person'] = info['company'], info['person']
+            if info.get('logoweb') is not None:
+                session['logoweb'] = str(info.get('logoweb') or '').strip()
     _refresh_documentos_alcance_session()
+    _sync_session_logoweb()
     return {
         'company': session.get('company'),
         'person': session.get('person'),
@@ -206,6 +257,134 @@ def _documentos_personal_template_context():
     return _reporte_filtros_perfil_template_context()
 
 
+def _tipos_documento_web_catalog():
+    """Lista PR_tipodocWeb con metadatos para tarjetas del dashboard SIMPLE."""
+    catalog = []
+    for row in get_tipos_documentos() or []:
+        if not isinstance(row, dict):
+            continue
+        codigo = str(row.get('Tipodocumento') or '').strip()
+        if not codigo:
+            continue
+        nombre = str(row.get('name') or codigo).strip()
+        meta = _meta_tipo_documento_web(codigo, nombre)
+        catalog.append({
+            'codigo': codigo,
+            'nombre': nombre,
+            'icono': meta['icono'],
+            'descripcion': meta['descripcion'],
+        })
+    return catalog
+
+
+def _meta_tipo_documento_web(codigo, nombre):
+    """Icono y texto corto por tipo de documento (dashboard SIMPLE)."""
+    cod = str(codigo or '').strip().upper()
+    nombre = str(nombre or cod).strip()
+    presets = {
+        'BOL': ('bi-file-earmark-text', 'Descarga tus boletas de pago'),
+        'CTS': ('bi-piggy-bank', 'Certificados y liquidaciones CTS'),
+        'GRA': ('bi-mortarboard', 'Constancias y documentos de gratificación'),
+        'VAC': ('bi-calendar-check', 'Documentos relacionados a vacaciones'),
+        'UTI': ('bi-calculator', 'Utilidades y participaciones'),
+        'LIQ': ('bi-cash-stack', 'Liquidaciones y finiquitos'),
+        'PLA': ('bi-clipboard-data', 'Planillas y resúmenes'),
+    }
+    icono, descripcion = presets.get(cod, ('bi-file-earmark-pdf', f'Descarga tus documentos de {nombre}'))
+    return {'icono': icono, 'descripcion': descripcion}
+
+
+def _tipodoc_web_por_codigo(codigo):
+    codigo = str(codigo or '').strip()
+    if not codigo:
+        return None
+    for item in _tipos_documento_web_catalog():
+        if item['codigo'] == codigo:
+            return item
+    return None
+
+
+def _documentos_personal_fetch_rows(cia, period, tipodoc, person, dni):
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "EXEC sp_pr_reportenotificaciones_web @cia=?, @period=?, @tipodoc=?, @person=?, @dni=?",
+            (cia, period, tipodoc, person, dni),
+        )
+        return _dicts_first_nonempty_resultset(cursor)
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def _documentos_personal_build_payload(rows, cia, modo='completo'):
+    """Arma headers/data JSON del reporte de documentos (completo o SIMPLE/móvil)."""
+    if modo == 'simple':
+        headers_es = ['Periodo', 'Fecha descarga', 'Descargar']
+        resultado = []
+        for r in rows:
+            periodo_doc = _fmt_periodo_yyyy_mm(r.get('periodo'))
+            drive_id = str(r.get('drivefileid') or '').strip()
+            tipo_doc = _jsonable_value(r.get('tipodocumento'))
+            dni = str(r.get('person') or '').strip()
+            resultado.append([
+                periodo_doc,
+                _fmt_fecha_hora_dd_mm_yyyy_hh_mm(r.get('fechadescarga')),
+                {
+                    'drivefileid': drive_id,
+                    'person': dni,
+                    'period': str(r.get('periodo') or '').strip(),
+                    'tipodocumento': str(tipo_doc or '').strip(),
+                    'cia': cia,
+                },
+            ])
+        return {'headers': headers_es, 'data': resultado}
+
+    headers_es = [
+        'Código',
+        'Nombre',
+        'Tipo documento',
+        'Periodo',
+        'Fecha descarga',
+        'Descargar',
+    ]
+    resultado = []
+    for r in rows:
+        periodo_doc = _fmt_periodo_yyyy_mm(r.get('periodo'))
+        drive_id = str(r.get('drivefileid') or '').strip()
+        tipo_doc = _jsonable_value(r.get('tipodocumento'))
+        dni = str(r.get('person') or '').strip()
+        resultado.append([
+            _jsonable_value(r.get('person')),
+            _jsonable_value(r.get('name')),
+            tipo_doc,
+            periodo_doc,
+            _fmt_fecha_hora_dd_mm_yyyy_hh_mm(r.get('fechadescarga')),
+            {
+                'drivefileid': drive_id,
+                'person': dni,
+                'period': str(r.get('periodo') or '').strip(),
+                'tipodocumento': str(tipo_doc or '').strip(),
+                'cia': cia,
+            },
+        ])
+    return {'headers': headers_es, 'data': resultado}
+
+
+def _documentos_personal_redirect_tras_descarga():
+    if session.get('simple_profile'):
+        tipodoc = str(request.args.get('tipodocumento') or '').strip()
+        if tipodoc and _tipodoc_web_por_codigo(tipodoc):
+            return redirect(url_for('mis_documentos_simple_page', tipodoc=tipodoc))
+        return redirect(url_for('dashboard'))
+    return redirect(url_for('reporte_documentos_personal_page'))
+
+
 @app.template_filter('importe')
 def format_importe(value):
     try:
@@ -241,9 +420,21 @@ def fecha_filter(value):
     return s
 
 
+@app.before_request
+def _preload_user_session():
+    """Sincroniza company/logoweb antes de renderizar plantillas (p. ej. dashboard)."""
+    if request.endpoint == 'static':
+        return
+    if current_user.is_authenticated:
+        ensure_user_session()
+
+
 @app.context_processor
 def inject_now():
-    return {'now': datetime.now()}
+    return {
+        'now': datetime.now(),
+        'logo_empresa': _resolver_logo_empresa_url(),
+    }
 
 
 def _jsonable_value(value):
@@ -767,7 +958,40 @@ def logout():
 @app.route('/dashboard')
 @login_required
 def dashboard():
-    return render_template('dashboard.html')
+    ensure_user_session()
+    nombre = ''
+    if session.get('simple_profile'):
+        nombre = str(session.get('simple_lock_person_name') or '').strip()
+    if not nombre and current_user.is_authenticated:
+        nombre = str(getattr(current_user, 'nombre', None) or current_user.username or '').strip()
+    return render_template(
+        'dashboard.html',
+        mostrar_documentos_simple=bool(session.get('simple_profile')),
+        tipos_documentos_web=_tipos_documento_web_catalog() if session.get('simple_profile') else [],
+        nombre_bienvenida=nombre,
+    )
+
+
+@app.route('/mis-documentos/<tipodoc>')
+@login_required
+def mis_documentos_simple_page(tipodoc):
+    """Vista reducida de documentos del personal (perfil SIMPLE, uso móvil)."""
+    ensure_user_session()
+    if not session.get('simple_profile'):
+        return redirect(url_for('reporte_documentos_personal_page'))
+    tipo = _tipodoc_web_por_codigo(tipodoc)
+    if not tipo:
+        flash('Tipo de documento no válido.', 'warning')
+        return redirect(url_for('dashboard'))
+    lock_cia = _documentos_effective_company_lock()
+    ctx = _documentos_personal_template_context()
+    ctx.update({
+        'tipo_documento_codigo': tipo['codigo'],
+        'tipo_documento_nombre': tipo['nombre'],
+        'tipo_documento_icono': tipo['icono'],
+        'simple_cia_codigo': lock_cia or str(session.get('company') or '').strip(),
+    })
+    return render_template('reporte_documentos_personal_simple.html', **ctx)
 
 
 def _ruta_carga_documentos_efectiva(user_id):
@@ -1316,6 +1540,11 @@ def reporte_saldo_vacaciones_page():
 @app.route('/reporte-documentos-personal')
 @login_required
 def reporte_documentos_personal_page():
+    """Reporte completo con filtros (administradores / perfiles distintos de SIMPLE)."""
+    ensure_user_session()
+    if session.get('simple_profile'):
+        flash('Use el Dashboard para descargar sus documentos.', 'info')
+        return redirect(url_for('dashboard'))
     return render_template('reporte_documentos_personal.html', **_documentos_personal_template_context())
 
 
@@ -2268,7 +2497,7 @@ def reporte_planilla_vertical_post():
 @app.route('/reporte_vacaciones_detalle', methods=['POST'])
 @login_required
 def reporte_vacaciones_detalle_post():
-    """sp_pr_r019_vacationdetail_web @cia, @period, @person."""
+    """sp_pr_r019_vacationdetail_web @cia, @period, @person, @dni."""
     ensure_user_session()
     lock_cia = _documentos_effective_company_lock()
     lock_person = _documentos_effective_person_lock()
@@ -2285,6 +2514,7 @@ def reporte_vacaciones_detalle_post():
     person = str(body.get('person') or '0').strip() or '0'
     if lock_person:
         person = lock_person
+    dni = str(body.get('dni') or '').strip()
 
     if not cia:
         return jsonify({"error": "Seleccione una compañía."}), 400
@@ -2306,8 +2536,8 @@ def reporte_vacaciones_detalle_post():
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
-            "EXEC sp_pr_r019_vacationdetail_web @cia=?, @period=?, @person=?",
-            (cia, period, person),
+            "EXEC sp_pr_r019_vacationdetail_web @cia=?, @period=?, @person=?, @dni=?",
+            (cia, period, person, dni),
         )
         rows = _dicts_first_nonempty_resultset(cursor)
         resultado = []
@@ -2338,7 +2568,7 @@ def reporte_vacaciones_detalle_post():
 @app.route('/reporte_documentos_personal', methods=['POST'])
 @login_required
 def reporte_documentos_personal_post():
-    """sp_pr_reportenotificaciones_web @cia, @period, @tipodoc, @person."""
+    """sp_pr_reportenotificaciones_web @cia, @period, @tipodoc, @person, @dni."""
     ensure_user_session()
     lock_cia = _documentos_effective_company_lock()
     lock_person = _documentos_effective_person_lock()
@@ -2353,60 +2583,34 @@ def reporte_documentos_personal_post():
     if lock_person:
         person = lock_person
     tipodoc = str(body.get('tipodoc') or body.get('tipodocumento') or '0').strip() or '0'
+    dni = str(body.get('dni') or '').strip()
+    modo_simple = bool(session.get('simple_profile')) or str(body.get('modo') or '').strip().lower() == 'simple'
 
     if not cia:
         return jsonify({"error": "Seleccione una compañía."}), 400
 
-    headers_es = [
-        'Código',
-        'Nombre',
-        'Tipo documento',
-        'Periodo',
-        'Fecha descarga',
-        'Descargar',
-    ]
+    if modo_simple:
+        if not lock_person:
+            return jsonify({"error": "No se pudo determinar el trabajador asociado a su cuenta."}), 403
+        if tipodoc in ('', '0'):
+            return jsonify({"error": "Seleccione un tipo de documento."}), 400
+        if not _tipodoc_web_por_codigo(tipodoc):
+            return jsonify({"error": "Tipo de documento no válido."}), 400
+        period = '0'
+        person = lock_person
+        dni = ''
 
-    conn = None
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "EXEC sp_pr_reportenotificaciones_web @cia=?, @period=?, @tipodoc=?, @person=?",
-            (cia, period, tipodoc, person),
+        rows = _documentos_personal_fetch_rows(cia, period, tipodoc, person, dni)
+        payload = _documentos_personal_build_payload(
+            rows,
+            cia,
+            modo='simple' if modo_simple else 'completo',
         )
-        rows = _dicts_first_nonempty_resultset(cursor)
-        resultado = []
-        for r in rows:
-            periodo_doc = _fmt_periodo_yyyy_mm(r.get('periodo'))
-            drive_id = str(r.get('drivefileid') or '').strip()
-            tipo_doc = _jsonable_value(r.get('tipodocumento'))
-            dni = str(r.get('person') or '').strip()
-
-            fila = [
-                _jsonable_value(r.get('person')),
-                _jsonable_value(r.get('name')),
-                tipo_doc,
-                periodo_doc,
-                _fmt_fecha_hora_dd_mm_yyyy_hh_mm(r.get('fechadescarga')),
-                {
-                    'drivefileid': drive_id,
-                    'person': dni,
-                    'period': str(r.get('periodo') or '').strip(),
-                    'tipodocumento': str(tipo_doc or '').strip(),
-                    'cia': cia,
-                },
-            ]
-            resultado.append(fila)
-        return jsonify({"headers": headers_es, "data": resultado})
+        return jsonify(payload)
     except Exception as e:
         logging.exception("reporte_documentos_personal_post")
         return jsonify({"error": str(e)}), 500
-    finally:
-        if conn:
-            try:
-                conn.close()
-            except Exception:
-                pass
 
 
 @app.route('/documentos-personal/descargar')
@@ -2430,7 +2634,7 @@ def descargar_documento_personal():
         if json_errors:
             return jsonify({'error': 'No se encontró el archivo de Google Drive (file_id vacío).'}), 400
         flash('No se encontró el archivo de Google Drive.', 'error')
-        return redirect(url_for('reporte_documentos_personal_page'))
+        return _documentos_personal_redirect_tras_descarga()
 
     try:
         archivo_io, nombre_archivo, mime = _descargar_archivo_drive(drive_id)
@@ -2441,7 +2645,7 @@ def descargar_documento_personal():
         if json_errors:
             return jsonify({'error': msg, 'code': code}), 502
         flash(msg, 'error')
-        return redirect(url_for('reporte_documentos_personal_page'))
+        return _documentos_personal_redirect_tras_descarga()
 
     if cia and person and period and tipodocumento:
         if not User.usuario_omite_actualizacion_fechadescarga_descarga(current_user.id):
@@ -2477,7 +2681,7 @@ def _parse_fecha_reporte_saldo(raw):
 @app.route('/reporte_saldo_vacaciones', methods=['POST'])
 @login_required
 def reporte_saldo_vacaciones_post():
-    """sp_pr_reportesaldos_total_web @company, @person, @date, @cesados."""
+    """sp_pr_reportesaldos_total_web @company, @person, @date, @cesados, @dni."""
     ensure_user_session()
     lock_cia = _documentos_effective_company_lock()
     lock_person = _documentos_effective_person_lock()
@@ -2488,6 +2692,7 @@ def reporte_saldo_vacaciones_post():
     person = str(body.get('person') or '0').strip() or '0'
     if lock_person:
         person = lock_person
+    dni = str(body.get('dni') or '').strip()
     fecha_corte = _parse_fecha_reporte_saldo(body.get('date') or body.get('fecha'))
     cesados_raw = str(body.get('cesados') or body.get('cesados_saldo') or 'T').strip().upper()
     cesados = cesados_raw if cesados_raw in ('T', 'Y', 'N') else 'T'
@@ -2527,8 +2732,8 @@ def reporte_saldo_vacaciones_post():
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
-            "EXEC sp_pr_reportesaldos_total_web @company=?, @person=?, @date=?, @cesados=?",
-            (cia, person, fecha_corte, cesados),
+            "EXEC sp_pr_reportesaldos_total_web @company=?, @person=?, @date=?, @cesados=?, @dni=?",
+            (cia, person, fecha_corte, cesados, dni),
         )
         rows = _dicts_last_nonempty_resultset(cursor)
         resultado = []

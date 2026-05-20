@@ -96,13 +96,17 @@
         background-color: #f8f9fa;
     }
 
-    /* Filtros reporte: empleado más ancho; tipo documento con fondo azul suave */
-    .doc-filtro-empleado .form-select {
+    /* Filtros reporte: empleado, DNI y tipo documento en la misma fila */
+    .doc-filtro-empleado .form-select,
+    .doc-filtro-tipo-documento .form-select {
         min-width: 0;
     }
     @media (min-width: 992px) {
         .doc-filtro-empleado .form-select {
-            min-width: 13rem;
+            min-width: 9.5rem;
+        }
+        .doc-filtro-tipo-documento .form-select {
+            min-width: 7.5rem;
         }
     }
     .doc-filtro-tipo-documento {
@@ -136,7 +140,7 @@
                     <option value="">Seleccione compañía...</option>
                 </select>
             </div>
-            <div class="col-12 col-sm-6 col-lg-4 doc-filtro-empleado">
+            <div class="col-12 col-sm-6 col-lg-3 doc-filtro-empleado">
                 <label for="cboTrabajador" class="form-label small fw-bold text-muted">Empleado
                     {% if not simple_restringe_trabajador %}<span class="fw-normal opacity-75">(opcional)</span>{% endif %}
                 </label>
@@ -149,7 +153,11 @@
                     {% endif %}
                 </select>
             </div>
-            <div class="col-12 col-sm-6 col-lg-3 doc-filtro-tipo-documento">
+            <div class="col-6 col-sm-4 col-lg-2 doc-filtro-dni">
+                <label for="txtDni" class="form-label small fw-bold text-muted">DNI <span class="fw-normal opacity-75">(opcional)</span></label>
+                <input type="text" id="txtDni" class="form-control form-control-sm" placeholder="Buscar..." maxlength="20" autocomplete="off">
+            </div>
+            <div class="col-6 col-sm-4 col-lg-2 doc-filtro-tipo-documento">
                 <label for="cboTipoDocumento" class="form-label small fw-bold text-muted">Tipo documento</label>
                 <select id="cboTipoDocumento" class="form-select form-select-sm">
                     <option value="0">Todos</option>
@@ -428,10 +436,11 @@ document.addEventListener('DOMContentLoaded', async function () {
 
         const metaRow2 = ws.addRow([
             'Tipo documento', meta.tipoDocumento || '',
-            'Empleado', meta.empleado || ''
+            'Empleado', meta.empleado || '',
+            'DNI', meta.dni || ''
         ]);
         metaRow2.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-            if (colNumber <= 4) {
+            if (colNumber <= 6) {
                 cell.fill = fill(F.meta);
                 cell.font = { bold: colNumber % 2 === 1 };
                 cell.alignment = alignCenter;
@@ -597,12 +606,13 @@ document.addEventListener('DOMContentLoaded', async function () {
         }
         let tipodoc = document.getElementById('cboTipoDocumento').value.trim();
         if (!tipodoc) tipodoc = '0';
+        const dni = document.getElementById('txtDni').value.trim();
 
         try {
             const res = await fetch(URL_REPORTE, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ cia, period, person, tipodoc }),
+                body: JSON.stringify({ cia, period, person, tipodoc, dni }),
             });
             const payload = await res.json();
             if (!res.ok || payload.error) {
@@ -627,6 +637,7 @@ document.addEventListener('DOMContentLoaded', async function () {
                     periodo: selectedText('cboPeriodo'),
                     tipoDocumento: selectedText('cboTipoDocumento'),
                     empleado: selectedText('cboTrabajador'),
+                    dni: document.getElementById('txtDni').value.trim(),
                 },
             };
             document.getElementById('btnExportExcelDocs').disabled = false;

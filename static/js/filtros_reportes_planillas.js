@@ -214,6 +214,7 @@
                     cia: val('cboCompania'),
                     periodo: val('cboPeriodo'),
                     person: val('cboTrabajador'),
+                    dni: val('txtDni'),
                     timestamp: Date.now()
                 };
                 localStorage.setItem(STORAGE_KEY_VACACIONES_DETALLE, JSON.stringify(estado));
@@ -274,15 +275,22 @@
                 }
             }
 
+            const inpDni = document.getElementById('txtDni');
+            if (inpDni && filtros.dni != null) {
+                inpDni.value = String(filtros.dni).trim();
+            }
+
             guardar();
             return true;
         }
 
         function registrarGuardadoEnCambio() {
-            ['cboCompania', 'cboPeriodo', 'cboTrabajador'].forEach((id) => {
+            ['cboCompania', 'cboPeriodo', 'cboTrabajador', 'txtDni'].forEach((id) => {
                 const el = document.getElementById(id);
                 if (el) el.addEventListener('change', guardar);
             });
+            const inpDni = document.getElementById('txtDni');
+            if (inpDni) inpDni.addEventListener('input', guardar);
         }
 
         return {
@@ -302,6 +310,7 @@
                     fecha: val('inpFechaCorte'),
                     cesados: val('cboCesadosSaldo'),
                     person: val('cboTrabajador'),
+                    dni: val('txtDni'),
                     timestamp: Date.now()
                 };
                 localStorage.setItem(STORAGE_KEY_SALDO_VACACIONES, JSON.stringify(estado));
@@ -361,15 +370,22 @@
                 }
             }
 
+            const inpDni = document.getElementById('txtDni');
+            if (inpDni && filtros.dni != null) {
+                inpDni.value = String(filtros.dni).trim();
+            }
+
             guardar();
             return true;
         }
 
         function registrarGuardadoEnCambio() {
-            ['cboCompania', 'cboTrabajador', 'inpFechaCorte', 'cboCesadosSaldo'].forEach((id) => {
+            ['cboCompania', 'cboTrabajador', 'inpFechaCorte', 'cboCesadosSaldo', 'txtDni'].forEach((id) => {
                 const el = document.getElementById(id);
                 if (el) el.addEventListener('change', guardar);
             });
+            const inpDni = document.getElementById('txtDni');
+            if (inpDni) inpDni.addEventListener('input', guardar);
         }
 
         return {

@@ -1,0 +1,299 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ tipo_documento_nombre }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .docs-simple-back {
+        font-size: 0.85rem;
+        text-decoration: none;
+    }
+
+    .docs-simple-header {
+        background: #fff;
+        border: 1px solid #e9ecef;
+        border-radius: 10px;
+        padding: 0.9rem 1rem;
+        margin-bottom: 1rem;
+    }
+
+    .docs-simple-header-icon {
+        width: 2.25rem;
+        height: 2.25rem;
+        border-radius: 8px;
+        background: #e8f4fc;
+        color: var(--accent-color);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.1rem;
+    }
+
+    .docs-simple-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        max-width: 520px;
+    }
+
+    .docs-simple-item {
+        background: #fff;
+        border: 1px solid #e9ecef;
+        border-radius: 10px;
+        padding: 0.65rem 0.75rem;
+        display: grid;
+        grid-template-columns: 1fr auto;
+        grid-template-rows: auto auto;
+        gap: 0.15rem 0.5rem;
+        align-items: center;
+    }
+
+    .docs-simple-item .lbl-periodo {
+        font-weight: 700;
+        font-size: 0.95rem;
+        color: #1e293b;
+        grid-column: 1;
+        grid-row: 1;
+    }
+
+    .docs-simple-item .lbl-fecha {
+        font-size: 0.78rem;
+        color: #64748b;
+        grid-column: 1;
+        grid-row: 2;
+    }
+
+    .docs-simple-item .td-descarga {
+        grid-column: 2;
+        grid-row: 1 / span 2;
+        text-align: center;
+    }
+
+    .docs-simple-item .doc-download-trigger {
+        appearance: none;
+        border: none;
+        background: #e8f4fc;
+        color: var(--accent-color);
+        width: 2.5rem;
+        height: 2.5rem;
+        border-radius: 8px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: background 0.15s ease, transform 0.15s ease;
+    }
+
+    .docs-simple-item .doc-download-trigger:hover,
+    .docs-simple-item .doc-download-trigger:focus-visible {
+        background: #d4ebfa;
+        transform: scale(1.05);
+    }
+
+    .docs-simple-item .doc-download-trigger .bi {
+        font-size: 1.15rem;
+        pointer-events: none;
+    }
+
+    .docs-simple-empty {
+        text-align: center;
+        color: #64748b;
+        padding: 2rem 1rem;
+        background: #fff;
+        border: 1px dashed #dee2e6;
+        border-radius: 10px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="mb-3">
+    <a href="{{ url_for('dashboard') }}#mis-documentos" class="docs-simple-back text-muted">
+        <i class="bi bi-arrow-left"></i> Volver al inicio
+    </a>
+</div>
+
+<div class="docs-simple-header d-flex align-items-center gap-3">
+    <span class="docs-simple-header-icon" aria-hidden="true">
+        <i class="bi {{ tipo_documento_icono }}"></i>
+    </span>
+    <div>
+        <h1 class="h5 mb-0 fw-bold">{{ tipo_documento_nombre }}</h1>
+        <p class="mb-0 small text-muted">Periodo y descarga de tus documentos</p>
+    </div>
+</div>
+
+<div id="docsSimpleEstado" class="text-center text-muted small py-3">
+    <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+    Cargando documentos...
+</div>
+
+<div id="docsSimpleLista" class="docs-simple-list d-none" aria-live="polite"></div>
+
+<p class="text-muted small mt-2 mb-0">
+    Registros: <span id="lblRowCountDocsSimple">0</span>
+</p>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.addEventListener('DOMContentLoaded', async function () {
+    const URL_REPORTE = {{ url_for('reporte_documentos_personal_post') | tojson }};
+    const URL_DESCARGAR = {{ url_for('descargar_documento_personal') | tojson }};
+    const TIPO_DOC = {{ tipo_documento_codigo | tojson }};
+    const CIA = {{ simple_cia_codigo | tojson }};
+    const PERSON = {{ simple_trabajador_codigo | tojson }};
+
+    const listaEl = document.getElementById('docsSimpleLista');
+    const estadoEl = document.getElementById('docsSimpleEstado');
+    const lblCount = document.getElementById('lblRowCountDocsSimple');
+
+    function escapeHtml(s) {
+        return String(s || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    function filenameFromContentDisposition(header) {
+        if (!header || typeof header !== 'string') return 'documento.pdf';
+        const mStar = /filename\*=(?:UTF-8'')?([^;\n]+)/i.exec(header);
+        if (mStar) {
+            let raw = mStar[1].trim().replace(/^["']|["']$/g, '');
+            try { return decodeURIComponent(raw); } catch (e) { return raw || 'documento.pdf'; }
+        }
+        const m = /filename="([^"]+)"/i.exec(header);
+        if (m) return m[1].trim();
+        const m2 = /filename=([^;\s]+)/i.exec(header);
+        if (m2) return m2[1].trim().replace(/^["']|["']$/g, '');
+        return 'documento.pdf';
+    }
+
+    function renderLista(payload) {
+        const filas = payload.data || [];
+        lblCount.textContent = String(filas.length);
+        if (!filas.length) {
+            listaEl.classList.add('d-none');
+            estadoEl.classList.remove('d-none');
+            estadoEl.innerHTML = '<div class="docs-simple-empty">No hay documentos disponibles para este tipo.</div>';
+            return;
+        }
+        estadoEl.classList.add('d-none');
+        listaEl.classList.remove('d-none');
+        let html = '';
+        filas.forEach(function (rowVals) {
+            const periodo = rowVals[0] != null ? String(rowVals[0]) : '';
+            const fecha = rowVals[1] != null ? String(rowVals[1]) : '—';
+            const valor = rowVals[2];
+            let btnHtml = '';
+            if (valor && typeof valor === 'object' && valor.drivefileid) {
+                const q = new URLSearchParams({
+                    file_id: String(valor.drivefileid || ''),
+                    person: String(valor.person || ''),
+                    period: String(valor.period || ''),
+                    tipodocumento: String(valor.tipodocumento || ''),
+                    cia: String(valor.cia || ''),
+                });
+                const downloadUrl = URL_DESCARGAR + '?' + q.toString();
+                btnHtml = '<button type="button" class="doc-download-trigger" data-download-url="' + escapeHtml(downloadUrl) + '" title="Descargar documento" aria-label="Descargar ' + escapeHtml(periodo) + '">' +
+                    '<i class="bi bi-download" aria-hidden="true"></i></button>';
+            } else {
+                btnHtml = '<span class="text-muted small">—</span>';
+            }
+            html += '<article class="docs-simple-item">' +
+                '<div class="lbl-periodo">' + escapeHtml(periodo) + '</div>' +
+                '<div class="lbl-fecha">Descargado: ' + escapeHtml(fecha) + '</div>' +
+                '<div class="td-descarga">' + btnHtml + '</div>' +
+                '</article>';
+        });
+        listaEl.innerHTML = html;
+    }
+
+    listaEl.addEventListener('click', async function (e) {
+        const btn = e.target.closest('.doc-download-trigger');
+        if (!btn || btn.disabled) return;
+        e.preventDefault();
+        const url = btn.getAttribute('data-download-url');
+        if (!url) return;
+        btn.disabled = true;
+        try {
+            const res = await fetch(url, {
+                credentials: 'same-origin',
+                headers: { 'X-Fetch-Descarga': '1' },
+            });
+            if (!res.ok) {
+                const text = await res.text().catch(function () { return ''; });
+                let detail = 'No se pudo descargar el documento (código ' + res.status + ').';
+                try {
+                    const j = JSON.parse(text);
+                    if (j && j.error) detail = j.error;
+                    if (j && j.code) detail += ' (Ref. soporte: ' + j.code + ')';
+                } catch (e2) { /* no JSON */ }
+                alert(detail);
+                return;
+            }
+            const ctype = (res.headers.get('Content-Type') || '').toLowerCase();
+            if (ctype.indexOf('text/html') !== -1) {
+                alert('La sesión pudo haber expirado. Vuelva a iniciar sesión e intente de nuevo.');
+                return;
+            }
+            const blob = await res.blob();
+            const name = filenameFromContentDisposition(res.headers.get('Content-Disposition'));
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = name;
+            a.rel = 'noopener';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(a.href);
+            await cargarDocumentos();
+        } catch (err) {
+            console.error(err);
+            alert('Error de red al descargar el documento.');
+        } finally {
+            btn.disabled = false;
+        }
+    });
+
+    async function cargarDocumentos() {
+        if (!CIA || !PERSON) {
+            estadoEl.innerHTML = '<div class="docs-simple-empty text-danger">No se pudo determinar su compañía o trabajador.</div>';
+            return;
+        }
+        estadoEl.classList.remove('d-none');
+        estadoEl.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Cargando documentos...';
+        listaEl.classList.add('d-none');
+        try {
+            const res = await fetch(URL_REPORTE, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    cia: CIA,
+                    period: '0',
+                    person: PERSON,
+                    tipodoc: TIPO_DOC,
+                    dni: '',
+                    modo: 'simple',
+                }),
+            });
+            const payload = await res.json();
+            if (!res.ok || payload.error) {
+                estadoEl.classList.remove('d-none');
+                estadoEl.innerHTML = '<div class="docs-simple-empty text-danger">' + escapeHtml(payload.error || 'Error al cargar documentos.') + '</div>';
+                lblCount.textContent = '0';
+                return;
+            }
+            renderLista(payload);
+        } catch (e) {
+            console.error(e);
+            estadoEl.classList.remove('d-none');
+            estadoEl.innerHTML = '<div class="docs-simple-empty text-danger">Error de red o del servidor.</div>';
+            lblCount.textContent = '0';
+        }
+    }
+
+    await cargarDocumentos();
+});
+</script>
+{% endblock %}

@@ -4,28 +4,32 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Portal Minería - {% block title %}{% endblock %}</title>
-    <!-- Bootstrap 5 CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <!-- Google Fonts & Icons -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
-    <!-- Font Awesome (compatibilidad con vistas que usan .fas / .fa-*) -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
     <style>
         :root {
             --sidebar-width: 260px;
+            --sidebar-collapsed-width: 70px;
             --sidebar-bg: #2c3e50;
             --primary-color: #2c3e50;
             --accent-color: #3498db;
+            --header-height: 64px;
         }
 
         body {
             font-family: 'Inter', sans-serif;
             background-color: #f8f9fa;
+            overflow-x: hidden;
         }
 
-        /* Sidebar Styling */
+        .wrapper {
+            min-height: 100vh;
+        }
+
+        /* -- Sidebar -- */
         #sidebar {
             width: var(--sidebar-width);
             height: 100vh;
@@ -33,147 +37,385 @@
             left: 0;
             top: 0;
             background-color: var(--primary-color);
-            color: white;
-            transition: all 0.3s;
-            z-index: 1000;
+            color: #fff;
+            z-index: 1040;
+            display: flex;
+            flex-direction: column;
+            transition: width 0.3s ease, transform 0.3s ease;
+            overflow: hidden;
         }
 
         #sidebar .sidebar-header {
-            padding: 20px;
-            background: rgba(0,0,0,0.1);
-            text-align: center;
+            flex-shrink: 0;
+            padding: 0.45rem 0.65rem 0.75rem;
+            background: rgba(0, 0, 0, 0.12);
+            display: flex;
+            flex-direction: column;
+            align-items: stretch;
+            gap: 0.4rem;
+        }
+
+        .sidebar-header-toolbar {
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            min-height: 1.75rem;
+        }
+
+        .sidebar-toggle-btn {
+            flex-shrink: 0;
+            width: 2rem;
+            height: 2rem;
+            padding: 0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid rgba(255, 255, 255, 0.25);
+            background: rgba(255, 255, 255, 0.08);
+            color: #fff;
+            border-radius: 6px;
+            transition: background 0.2s ease, border-color 0.2s ease;
+        }
+
+        .sidebar-toggle-btn:hover {
+            background: rgba(255, 255, 255, 0.18);
+            color: #fff;
+            border-color: rgba(255, 255, 255, 0.4);
+        }
+
+        .sidebar-logo-wrap {
+            width: 100%;
+            min-width: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            padding: 0 0.15rem;
+        }
+
+        .sidebar-logo-wrap img {
+            display: block;
+            max-width: 100%;
+            width: auto;
+            height: auto;
+            max-height: 72px;
+            object-fit: contain;
+            transition: max-height 0.3s ease, max-width 0.3s ease;
+            filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.35)) brightness(1.05);
+        }
+
+        .sidebar-nav-scroll {
+            flex: 1;
+            overflow-y: auto;
+            overflow-x: hidden;
+            -webkit-overflow-scrolling: touch;
         }
 
         #sidebar ul.components {
-            padding: 20px 0;
+            padding: 0.75rem 0 1.25rem;
+            margin: 0;
         }
 
-        #sidebar ul li a {
-            padding: 12px 20px;
-            display: block;
-            color: rgba(255,255,255,0.7);
+        #sidebar ul li a.sidebar-link {
+            padding: 0.75rem 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.65rem;
+            color: rgba(255, 255, 255, 0.75);
             text-decoration: none;
-            transition: 0.3s;
+            transition: background 0.2s ease, color 0.2s ease;
+            white-space: nowrap;
+            min-height: 44px;
         }
 
-        #sidebar ul li a:hover, #sidebar ul li.active > a {
+        #sidebar ul li a.sidebar-link:hover,
+        #sidebar ul li.active > a.sidebar-link {
             color: #fff;
             background: var(--accent-color);
         }
 
-        #sidebar ul li a i {
-            margin-right: 10px;
+        .sidebar-link .sidebar-icon {
+            flex-shrink: 0;
+            width: 1.35rem;
+            font-size: 1.15rem;
+            text-align: center;
+        }
+
+        .sidebar-link-text {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            transition: opacity 0.2s ease, width 0.3s ease;
         }
 
         .sidebar-section-title {
             color: #aeb9c2;
             letter-spacing: 0.5px;
             pointer-events: none;
-            font-size: 0.7rem;
+            font-size: 0.68rem;
+            padding: 0.75rem 1rem 0.25rem;
+            margin: 0;
+            white-space: nowrap;
+            overflow: hidden;
+            transition: opacity 0.2s ease;
         }
 
-        /* Content Area */
+        /* Escritorio: sidebar colapsado (solo iconos) */
+        body.sidebar-collapsed #sidebar {
+            width: var(--sidebar-collapsed-width);
+        }
+
+        body.sidebar-collapsed .sidebar-link-text,
+        body.sidebar-collapsed .sidebar-section-title {
+            opacity: 0;
+            width: 0;
+            pointer-events: none;
+        }
+
+        body.sidebar-collapsed .sidebar-link {
+            justify-content: center;
+            padding-left: 0.5rem;
+            padding-right: 0.5rem;
+        }
+
+        body.sidebar-collapsed .sidebar-header {
+            padding: 0.4rem 0.35rem 0.5rem;
+        }
+
+        body.sidebar-collapsed .sidebar-header-toolbar {
+            justify-content: center;
+        }
+
+        body.sidebar-collapsed .sidebar-logo-wrap img {
+            max-height: 36px;
+            max-width: 48px;
+        }
+
+        body.sidebar-collapsed .sidebar-toggle-btn .bi-chevron-left {
+            transform: rotate(180deg);
+        }
+
+        /* Contenido principal */
         #content {
             width: calc(100% - var(--sidebar-width));
             margin-left: var(--sidebar-width);
-            transition: all 0.3s;
             min-height: 100vh;
+            transition: margin-left 0.3s ease, width 0.3s ease;
+        }
+
+        body.sidebar-collapsed #content {
+            width: calc(100% - var(--sidebar-collapsed-width));
+            margin-left: var(--sidebar-collapsed-width);
         }
 
         .navbar {
             background-color: #fff;
             border-bottom: 1px solid #dee2e6;
-            padding: 15px 30px;
+            padding: 0.65rem 1rem;
+            min-height: var(--header-height);
         }
 
+        .navbar-brand-logo {
+            max-height: 40px;
+            width: auto;
+            max-width: 140px;
+            object-fit: contain;
+        }
+
+        .navbar-welcome {
+            font-size: 0.95rem;
+        }
+
+        @media (max-width: 576px) {
+            .navbar-welcome {
+                font-size: 0.85rem;
+            }
+            .navbar-brand-logo {
+                max-height: 32px;
+                max-width: 100px;
+            }
+        }
+
+        /* Overlay móvil */
+        .sidebar-backdrop {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(15, 23, 42, 0.45);
+            z-index: 1035;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        body.sidebar-mobile-open .sidebar-backdrop {
+            display: block;
+            opacity: 1;
+        }
+
+        /* -- Movil: sidebar oculto, offcanvas -- */
         @media (max-width: 768px) {
-            #sidebar { margin-left: calc(-1 * var(--sidebar-width)); }
-            #sidebar.active { margin-left: 0; }
-            #content { width: 100%; margin-left: 0; }
+            body.sidebar-collapsed #sidebar,
+            #sidebar {
+                width: var(--sidebar-width);
+                transform: translateX(-100%);
+            }
+
+            body.sidebar-mobile-open #sidebar {
+                transform: translateX(0);
+                box-shadow: 4px 0 24px rgba(0, 0, 0, 0.25);
+            }
+
+            body.sidebar-collapsed .sidebar-link-text,
+            body.sidebar-collapsed .sidebar-section-title,
+            .sidebar-link-text,
+            .sidebar-section-title {
+                opacity: 1;
+                width: auto;
+                pointer-events: auto;
+            }
+
+            body.sidebar-collapsed .sidebar-link,
+            .sidebar-link {
+                justify-content: flex-start;
+                padding: 0.85rem 1.15rem;
+            }
+
+            body.sidebar-collapsed #content,
+            #content {
+                width: 100%;
+                margin-left: 0;
+            }
+
+            body.sidebar-collapsed .sidebar-logo-wrap img,
+            .sidebar-logo-wrap img {
+                max-height: 56px;
+                max-width: 100%;
+            }
+
+            /* En móvil el toggle del sidebar es la hamburguesa del header */
+            #sidebarCollapseToggle {
+                display: none !important;
+            }
+        }
+
+        @media (min-width: 769px) {
+            #sidebarMobileToggle {
+                display: none !important;
+            }
         }
     </style>
     {% block extra_css %}{% endblock %}
 </head>
 <body>
 
+    <div class="sidebar-backdrop" id="sidebarBackdrop" aria-hidden="true"></div>
+
     <div class="wrapper d-flex">
         <nav id="sidebar" aria-label="Navegación principal">
             <div class="sidebar-header">
-                <h4 class="mb-0">Portal Minería</h4>
+                <div class="sidebar-header-toolbar">
+                    <button type="button"
+                            class="sidebar-toggle-btn"
+                            id="sidebarCollapseToggle"
+                            aria-label="Colapsar o expandir menú lateral"
+                            aria-expanded="true">
+                        <i class="bi bi-chevron-left" aria-hidden="true"></i>
+                    </button>
+                </div>
+                <div class="sidebar-logo-wrap">
+                    <img src="{{ logo_empresa }}" alt="" class="sidebar-brand-logo" role="presentation">
+                </div>
             </div>
 
-            <ul class="list-unstyled components">
-                <li class="{{ 'active' if request.endpoint == 'dashboard' else '' }}">
-                    <a href="{{ url_for('dashboard') }}">
-                        <i class="bi bi-speedometer2"></i> Dashboard
-                    </a>
-                </li>
+            <div class="sidebar-nav-scroll">
+                <ul class="list-unstyled components mb-0">
+                    <li class="{{ 'active' if request.endpoint == 'dashboard' or (session.get('simple_profile') and request.endpoint == 'mis_documentos_simple_page') else '' }}">
+                        <a href="{{ url_for('dashboard') }}" class="sidebar-link" title="Dashboard">
+                            <i class="bi bi-speedometer2 sidebar-icon" aria-hidden="true"></i>
+                            <span class="sidebar-link-text">Dashboard</span>
+                        </a>
+                    </li>
 
-                <li class="py-0">
-                    <p class="sidebar-section-title px-3 mt-4 mb-0 text-uppercase fw-bold opacity-50">Configuración</p>
-                </li>
+                    <li class="py-0">
+                        <p class="sidebar-section-title text-uppercase fw-bold opacity-50">Configuración</p>
+                    </li>
 
-                <li class="{{ 'active' if request.endpoint == 'configuracion_usuario' else '' }}">
-                    <a href="{{ url_for('configuracion_usuario') }}">
-                        <i class="bi bi-person-gear"></i> Configuración por usuario
-                    </a>
-                </li>
+                    <li class="{{ 'active' if request.endpoint == 'configuracion_usuario' else '' }}">
+                        <a href="{{ url_for('configuracion_usuario') }}" class="sidebar-link" title="Configuración por usuario">
+                            <i class="bi bi-person-gear sidebar-icon" aria-hidden="true"></i>
+                            <span class="sidebar-link-text">Configuración por usuario</span>
+                        </a>
+                    </li>
 
-                <li class="{{ 'active' if request.endpoint == 'carga_documentos' else '' }}">
-                    <a href="{{ url_for('carga_documentos') }}">
-                        <i class="bi bi-cloud-upload"></i> Cargar documentos
-                    </a>
-                </li>
+                    <li class="{{ 'active' if request.endpoint == 'carga_documentos' else '' }}">
+                        <a href="{{ url_for('carga_documentos') }}" class="sidebar-link" title="Cargar documentos">
+                            <i class="bi bi-cloud-upload sidebar-icon" aria-hidden="true"></i>
+                            <span class="sidebar-link-text">Cargar documentos</span>
+                        </a>
+                    </li>
 
-                <li class="py-0">
-                    <p class="sidebar-section-title px-3 mt-4 mb-0 text-uppercase fw-bold opacity-50">Reportes</p>
-                </li>
+                    <li class="py-0">
+                        <p class="sidebar-section-title text-uppercase fw-bold opacity-50">Reportes</p>
+                    </li>
 
-                <li class="{{ 'active' if request.endpoint == 'reporte_vacaciones_detalle_page' else '' }}">
-                    <a href="{{ url_for('reporte_vacaciones_detalle_page') }}">
-                        <i class="bi bi-calendar-range"></i> Detalle de vacaciones
-                    </a>
-                </li>
+                    <li class="{{ 'active' if request.endpoint == 'reporte_vacaciones_detalle_page' else '' }}">
+                        <a href="{{ url_for('reporte_vacaciones_detalle_page') }}" class="sidebar-link" title="Detalle de vacaciones">
+                            <i class="bi bi-calendar-range sidebar-icon" aria-hidden="true"></i>
+                            <span class="sidebar-link-text">Detalle de vacaciones</span>
+                        </a>
+                    </li>
 
-                <li class="{{ 'active' if request.endpoint == 'reporte_saldo_vacaciones_page' else '' }}">
-                    <a href="{{ url_for('reporte_saldo_vacaciones_page') }}">
-                        <i class="bi bi-pie-chart"></i> Saldo de vacaciones
-                    </a>
-                </li>
+                    <li class="{{ 'active' if request.endpoint == 'reporte_saldo_vacaciones_page' else '' }}">
+                        <a href="{{ url_for('reporte_saldo_vacaciones_page') }}" class="sidebar-link" title="Saldo de vacaciones">
+                            <i class="bi bi-pie-chart sidebar-icon" aria-hidden="true"></i>
+                            <span class="sidebar-link-text">Saldo de vacaciones</span>
+                        </a>
+                    </li>
 
-                <li class="{{ 'active' if request.endpoint == 'reporte_documentos_personal_page' else '' }}">
-                    <a href="{{ url_for('reporte_documentos_personal_page') }}">
-                        <i class="bi bi-folder2-open"></i> Documentos del personal
-                    </a>
-                </li>
+                    {% if not session.get('simple_profile') %}
+                    <li class="{{ 'active' if request.endpoint == 'reporte_documentos_personal_page' else '' }}">
+                        <a href="{{ url_for('reporte_documentos_personal_page') }}" class="sidebar-link" title="Documentos del personal">
+                            <i class="bi bi-folder2-open sidebar-icon" aria-hidden="true"></i>
+                            <span class="sidebar-link-text">Documentos del personal</span>
+                        </a>
+                    </li>
+                    {% endif %}
 
-                <hr class="mx-3 opacity-25 mt-4">
+                    <hr class="mx-3 opacity-25 mt-3 mb-2">
 
-                <li>
-                    <a href="{{ url_for('logout') }}">
-                        <i class="bi bi-box-arrow-right"></i> Cerrar Sesión
-                    </a>
-                </li>
-            </ul>
+                    <li>
+                        <a href="{{ url_for('logout') }}" class="sidebar-link" title="Cerrar sesión">
+                            <i class="bi bi-box-arrow-right sidebar-icon" aria-hidden="true"></i>
+                            <span class="sidebar-link-text">Cerrar Sesión</span>
+                        </a>
+                    </li>
+                </ul>
+            </div>
         </nav>
 
         <div id="content">
-            <nav class="navbar navbar-expand-lg">
-                <div class="container-fluid">
-                    <button type="button" class="btn btn-outline-secondary d-md-none me-2" id="sidebarToggle" aria-label="Mostrar u ocultar menú">
-                        <i class="bi bi-list" aria-hidden="true"></i>
-                    </button>
-                    <span class="fw-bold me-3" style="color:#334155;">Portal Minería</span>
-                    <span class="navbar-text fw-bold">
-                        Bienvenido, {% if current_user.is_authenticated %}{{ current_user.nombre or current_user.username }}{% else %}Usuario{% endif %}
-                    </span>
-                    <div class="ms-auto">
+            <nav class="navbar navbar-expand-lg sticky-top">
+                <div class="container-fluid flex-wrap gap-2">
+                    <div class="d-flex align-items-center flex-grow-1 min-w-0">
+                        <button type="button"
+                                class="btn btn-outline-secondary me-2 flex-shrink-0"
+                                id="sidebarMobileToggle"
+                                aria-label="Abrir menú de navegación"
+                                aria-controls="sidebar"
+                                aria-expanded="false">
+                            <i class="bi bi-list fs-5" aria-hidden="true"></i>
+                        </button>
+                        <img src="{{ logo_empresa }}" alt="" class="navbar-brand-logo me-2 flex-shrink-0 d-none d-sm-block" role="presentation">
+                        <span class="navbar-text fw-bold navbar-welcome text-truncate mb-0">
+                            Bienvenido, {% if current_user.is_authenticated %}{{ current_user.nombre or current_user.username }}{% else %}Usuario{% endif %}
+                        </span>
+                    </div>
+                    <div class="flex-shrink-0">
                         <small class="text-muted">{{ now.strftime('%d/%m/%Y') if now else '' }}</small>
                     </div>
                 </div>
             </nav>
 
-            <div class="container-fluid p-4">
+            <main class="container-fluid p-3 p-md-4">
                 {% with messages = get_flashed_messages(with_categories=true) %}
                   {% if messages %}
                     {% for category, message in messages %}
@@ -186,22 +428,104 @@
                 {% endwith %}
 
                 {% block content %}{% endblock %}
-            </div>
+            </main>
         </div>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        (function () {
-            var btn = document.getElementById('sidebarToggle');
-            var sidebar = document.getElementById('sidebar');
-            if (btn && sidebar) {
-                btn.addEventListener('click', function () {
-                    sidebar.classList.toggle('active');
-                });
+    (function () {
+        var STORAGE_KEY = 'portalSidebarCollapsed';
+        var body = document.body;
+        var sidebar = document.getElementById('sidebar');
+        var backdrop = document.getElementById('sidebarBackdrop');
+        var btnCollapse = document.getElementById('sidebarCollapseToggle');
+        var btnMobile = document.getElementById('sidebarMobileToggle');
+
+        function isMobile() {
+            return window.matchMedia('(max-width: 768px)').matches;
+        }
+
+        function setCollapsed(collapsed) {
+            body.classList.toggle('sidebar-collapsed', collapsed);
+            if (btnCollapse) {
+                btnCollapse.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
             }
-        })();
+            if (!isMobile()) {
+                try {
+                    localStorage.setItem(STORAGE_KEY, collapsed ? '1' : '0');
+                } catch (e) { /* ignore */ }
+            }
+        }
+
+        function openMobile() {
+            body.classList.add('sidebar-mobile-open');
+            if (btnMobile) btnMobile.setAttribute('aria-expanded', 'true');
+            document.documentElement.style.overflow = 'hidden';
+        }
+
+        function closeMobile() {
+            body.classList.remove('sidebar-mobile-open');
+            if (btnMobile) btnMobile.setAttribute('aria-expanded', 'false');
+            document.documentElement.style.overflow = '';
+        }
+
+        function restoreDesktopState() {
+            if (isMobile()) {
+                body.classList.remove('sidebar-collapsed');
+                closeMobile();
+                return;
+            }
+            closeMobile();
+            var stored = null;
+            try { stored = localStorage.getItem(STORAGE_KEY); } catch (e) { /* ignore */ }
+            setCollapsed(stored === '1');
+        }
+
+        if (btnCollapse) {
+            btnCollapse.addEventListener('click', function () {
+                if (isMobile()) return;
+                setCollapsed(!body.classList.contains('sidebar-collapsed'));
+            });
+        }
+
+        if (btnMobile) {
+            btnMobile.addEventListener('click', function () {
+                if (!isMobile()) return;
+                if (body.classList.contains('sidebar-mobile-open')) {
+                    closeMobile();
+                } else {
+                    openMobile();
+                }
+            });
+        }
+
+        if (backdrop) {
+            backdrop.addEventListener('click', closeMobile);
+        }
+
+        if (sidebar) {
+            sidebar.querySelectorAll('.sidebar-link').forEach(function (link) {
+                link.addEventListener('click', function () {
+                    if (isMobile()) closeMobile();
+                });
+            });
+        }
+
+        window.addEventListener('resize', function () {
+            restoreDesktopState();
+        });
+
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape' && body.classList.contains('sidebar-mobile-open')) {
+                closeMobile();
+            }
+        });
+
+        restoreDesktopState();
+    })();
     </script>
     {% block extra_js %}{% endblock %}
 </body>
 </html>
+

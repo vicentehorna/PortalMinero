@@ -57,6 +57,15 @@
         z-index: 3;
         background-color: #f8f9fa;
     }
+
+    .vac-filtro-empleado .form-select {
+        min-width: 0;
+    }
+    @media (min-width: 992px) {
+        .vac-filtro-empleado .form-select {
+            min-width: 9.5rem;
+        }
+    }
 </style>
 {% endblock %}
 
@@ -66,7 +75,7 @@
         <h5 class="mb-0 fw-bold text-secondary"><i class="bi bi-calendar-range"></i> Detalle de vacaciones</h5>
     </div>
     <div class="card-body">
-        <form id="frmVacacionesDetalle" class="row g-3">
+        <form id="frmVacacionesDetalle" class="row g-2 g-lg-2 align-items-end">
             <div class="col-12 col-md-4 col-lg-3">
                 <label for="cboCompania" class="form-label small fw-bold text-muted">Compañía</label>
                 <select id="cboCompania" class="form-select form-select-sm" required
@@ -78,13 +87,13 @@
                     {% endif %}
                 </select>
             </div>
-            <div class="col-12 col-md-4 col-lg-3">
+            <div class="col-6 col-sm-4 col-lg-2">
                 <label for="cboPeriodo" class="form-label small fw-bold text-muted">Periodo</label>
                 <select id="cboPeriodo" class="form-select form-select-sm" required disabled>
                     <option value="">Seleccione compañía...</option>
                 </select>
             </div>
-            <div class="col-12 col-md-8 col-lg-6">
+            <div class="col-12 col-sm-6 col-lg-3 vac-filtro-empleado">
                 <label for="cboTrabajador" class="form-label small fw-bold text-muted">Empleado
                     {% if not simple_restringe_trabajador %}<span class="fw-normal opacity-75">(opcional)</span>{% endif %}
                 </label>
@@ -96,6 +105,10 @@
                     <option value="">Todos (por defecto)</option>
                     {% endif %}
                 </select>
+            </div>
+            <div class="col-6 col-sm-4 col-lg-2">
+                <label for="txtDni" class="form-label small fw-bold text-muted">DNI <span class="fw-normal opacity-75">(opcional)</span></label>
+                <input type="text" id="txtDni" class="form-control form-control-sm" placeholder="Buscar..." maxlength="20" autocomplete="off">
             </div>
             <div class="col-12 d-flex align-items-center flex-wrap gap-2 border-top pt-3 mt-3">
                 <button type="submit" class="btn btn-primary btn-sm px-4"><i class="bi bi-search"></i> Consultar</button>
@@ -278,10 +291,11 @@ document.addEventListener('DOMContentLoaded', async function () {
         const metaRow = ws.addRow([
             'Compañía', meta.compania || '',
             'Periodo', meta.periodo || '',
-            'Empleado', meta.empleado || ''
+            'Empleado', meta.empleado || '',
+            'DNI', meta.dni || ''
         ]);
         metaRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-            if (colNumber <= 6) {
+            if (colNumber <= 8) {
                 cell.fill = fill(F.meta);
                 cell.font = { bold: colNumber % 2 === 1 };
                 cell.alignment = alignCenter;
@@ -368,12 +382,13 @@ document.addEventListener('DOMContentLoaded', async function () {
         } else if (!person) {
             person = '0';
         }
+        const dni = document.getElementById('txtDni').value.trim();
 
         try {
             const res = await fetch(URL_REPORTE, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ cia, period, person })
+                body: JSON.stringify({ cia, period, person, dni })
             });
             const payload = await res.json();
             if (!res.ok) {
@@ -402,7 +417,8 @@ document.addEventListener('DOMContentLoaded', async function () {
                 meta: {
                     compania: selectedText('cboCompania'),
                     periodo: selectedText('cboPeriodo'),
-                    empleado: selectedText('cboTrabajador') || 'Todos'
+                    empleado: selectedText('cboTrabajador') || 'Todos',
+                    dni: document.getElementById('txtDni').value.trim()
                 }
             };
             document.getElementById('btnExportExcelVac').disabled = false;

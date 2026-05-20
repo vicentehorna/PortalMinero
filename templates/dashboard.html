@@ -7,21 +7,112 @@
     .dashboard-welcome {
         background: linear-gradient(135deg, var(--sidebar-bg) 0%, #334155 100%);
         color: white;
-        padding: 2rem;
+        padding: 1.75rem 1.5rem;
         border-radius: 12px;
-        margin-bottom: 2rem;
+        margin-bottom: 1.75rem;
         box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        word-wrap: break-word;
+        overflow-wrap: break-word;
+    }
+
+    .dashboard-section-title {
+        font-size: 1.05rem;
+        font-weight: 700;
+        color: #334155;
+        margin-bottom: 1rem;
+    }
+
+    .dashboard-section-title i {
+        color: var(--accent-color);
+        margin-right: 0.35rem;
+    }
+
+    .doc-tipo-card {
+        display: block;
+        height: 100%;
+        background: #fff;
+        border: 1px solid #e9ecef;
+        border-radius: 10px;
+        padding: 1.1rem 1rem;
+        text-decoration: none;
+        color: inherit;
+        box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+        transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+    }
+
+    .doc-tipo-card:hover,
+    .doc-tipo-card:focus-visible {
+        transform: translateY(-3px);
+        box-shadow: 0 8px 18px rgba(15, 23, 42, 0.1);
+        border-color: #cfe8fb;
+        color: inherit;
+    }
+
+    .doc-tipo-card-icon {
+        width: 2.5rem;
+        height: 2.5rem;
+        border-radius: 8px;
+        background: #e8f4fc;
+        color: var(--accent-color);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.25rem;
+        margin-bottom: 0.75rem;
+    }
+
+    .doc-tipo-card h3 {
+        font-size: 0.95rem;
+        font-weight: 700;
+        margin: 0 0 0.35rem;
+        color: #1e293b;
+    }
+
+    .doc-tipo-card p {
+        font-size: 0.78rem;
+        color: #64748b;
+        margin: 0;
+        line-height: 1.35;
     }
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="container-fluid py-4">
-    <div class="dashboard-welcome">
-        <h2 class="mb-2 fw-bold">Bienvenido, {{ current_user.username }}</h2>
-        <p class="mb-0 opacity-75">
-            Portal Minería. Las acciones del menú lateral se irán habilitando conforme avance el proyecto.
-        </p>
-    </div>
+<div class="row">
+<div class="col-12">
+<div class="dashboard-welcome">
+    <h2 class="mb-2 fw-bold">Bienvenido{% if nombre_bienvenida %}, {{ nombre_bienvenida }}{% endif %}</h2>
+    <p class="mb-0 opacity-75">
+        {% if mostrar_documentos_simple %}
+        Accede rápidamente a tus documentos desde las opciones siguientes.
+        {% else %}
+        Portal Minería. Las acciones del menú lateral se irán habilitando conforme avance el proyecto.
+        {% endif %}
+    </p>
 </div>
+</div>
+</div>
+
+{% if mostrar_documentos_simple and tipos_documentos_web %}
+<section id="mis-documentos" class="mb-4" aria-labelledby="titulo-mis-documentos">
+    <h2 id="titulo-mis-documentos" class="dashboard-section-title">
+        <i class="bi bi-people-fill" aria-hidden="true"></i> Mis documentos
+    </h2>
+    <div class="row g-3">
+        {% for tipo in tipos_documentos_web %}
+        <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+            <a class="doc-tipo-card"
+               href="{{ url_for('mis_documentos_simple_page', tipodoc=tipo.codigo) }}"
+               title="Ver {{ tipo.nombre }}">
+                <span class="doc-tipo-card-icon" aria-hidden="true">
+                    <i class="bi {{ tipo.icono }}"></i>
+                </span>
+                <h3>{{ tipo.nombre }}</h3>
+                <p>{{ tipo.descripcion }}</p>
+            </a>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
 {% endblock %}

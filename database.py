@@ -391,6 +391,40 @@ def update_ruta_documentos_usuario(user_id, ruta):
                 pass
 
 
+def get_logoweb_empresa(company_id):
+    """
+    Nombre de archivo del logo web de la compañía (columna logoweb en PR_mapping2).
+    Los archivos viven en static/img/logos/.
+  """
+    if not company_id:
+        return None
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT logoweb FROM PR_mapping2 WHERE company = ?",
+            (str(company_id).strip(),),
+        )
+        row = cursor.fetchone()
+        if not row or row[0] is None:
+            return None
+        name = str(row[0]).strip()
+        # Quitar ruta accidental (solo nombre de archivo en static/img/logos/)
+        if name:
+            name = os.path.basename(name.replace('\\', '/'))
+        return name or None
+    except Exception as e:
+        print(f"Error en get_logoweb_empresa: {e}")
+        return None
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 def get_config_empresa(company_id):
     """
     Obtiene nombres de archivo de logo/firma para la compañía.
@@ -425,7 +459,7 @@ class User(UserMixin):
             u.UserID,
             p.Name,
             p.email,
-            'Autónomo', c.Company
+            p.Name, c.Company
         FROM SY_User u
         INNER JOIN SY_Person p ON p.UserID = u.UserID
         INNER JOIN SY_Company c ON (p.Company = c.Company)
@@ -439,7 +473,7 @@ class User(UserMixin):
             u.UserID,
             p.Name,
             p.email,
-            'Autónomo', c.Company
+            p.Name, c.Company
         FROM SY_User u
         INNER JOIN SY_Person p ON p.UserID = u.UserID
         INNER JOIN PR_Employee E ON (p.Person = E.Person AND E.Status = 'N')
@@ -454,7 +488,7 @@ class User(UserMixin):
             u.UserID,
             p.Name,
             p.email,
-            'Autónomo', c.Company
+            p.Name, c.Company
         FROM SY_User u
         INNER JOIN SY_Person p ON p.UserID = u.UserID
         INNER JOIN SY_Company c ON (p.Company = c.Company)
@@ -468,7 +502,7 @@ class User(UserMixin):
             u.UserID,
             p.Name,
             p.email,
-            'Autónomo', c.Company
+            p.Name, c.Company
         FROM SY_User u
         INNER JOIN SY_Person p ON p.UserID = u.UserID
         INNER JOIN PR_Employee E ON (p.Person = E.Person AND E.Status = 'N')
@@ -737,7 +771,11 @@ def get_datos_usuario_web(userid):
 
         if not row:
             return None
-        return dict(zip(columns, row))
+        data = dict(zip(columns, row))
+        cia = data.get('company')
+        if cia is not None and str(cia).strip():
+            data['logoweb'] = get_logoweb_empresa(cia)
+        return data
     except Exception as e:
         print(f"Error en get_datos_usuario_web: {e}")
         return None
