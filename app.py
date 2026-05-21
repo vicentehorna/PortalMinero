@@ -1372,9 +1372,12 @@ def _listar_archivos_pdf_drive(folder_id):
         raise _runtime_error_google_api(e) from e
 
 
-def _credentials_drive_service_account(scopes=None):
+def _credentials_drive_service_account(scopes=None, subject=None):
     """
     Credenciales OAuth de la service account para la API de Drive.
+
+    subject: correo de usuario Workspace para delegación (domain-wide delegation).
+    Solo aplica en subida de sustentos si GOOGLE_DRIVE_SUSTENTO_IMPERSONATE_USER está definido.
 
     Orden (recomendado en Render: JSON como secreto, sin subir archivo al repo):
       1) GOOGLE_DRIVE_CREDENTIALS_JSON — contenido completo del JSON (una sola línea o compacto).
@@ -1405,7 +1408,10 @@ def _credentials_drive_service_account(scopes=None):
             raise RuntimeError(
                 f'La variable {env_name} debe ser un JSON de Google con "type": "service_account".'
             )
-        return service_account.Credentials.from_service_account_info(info, scopes=scopes)
+        creds = service_account.Credentials.from_service_account_info(info, scopes=scopes)
+        if subject:
+            creds = creds.with_subject(str(subject).strip())
+        return creds
 
     cred_path = _resolver_credenciales_drive()
     if not cred_path:
@@ -1414,10 +1420,22 @@ def _credentials_drive_service_account(scopes=None):
             'contenido del archivo JSON de la service account. En local puede usar GOOGLE_DRIVE_CREDENTIALS_FILE o '
             'SERVICE_ACCOUNT_FILE con la ruta al JSON.'
         )
-    return service_account.Credentials.from_service_account_file(cred_path, scopes=scopes)
+    creds = service_account.Credentials.from_service_account_file(cred_path, scopes=scopes)
+    if subject:
+        creds = creds.with_subject(str(subject).strip())
+    return creds
 
 
-def _build_drive_service(scopes=None):
+def _usuario_impersonacion_sustento_drive():
+    """Correo Workspace para subir sustentos en nombre del usuario (evita storageQuotaExceeded de la SA)."""
+    for key in ('GOOGLE_DRIVE_SUSTENTO_IMPERSONATE_USER', 'GOOGLE_DRIVE_DELEGATED_USER'):
+        val = str(os.getenv(key) or '').strip()
+        if val:
+            return val
+    return ''
+
+
+def _build_drive_service(scopes=None, subject=None):
     """
     Cliente Drive (service account). Refresca token con requests si aplica y usa AuthorizedHttp con timeout
     largo para reducir timeouts intermitentes (WinError 10060) en redes lentas o firewalls lentos.
@@ -1429,7 +1447,7 @@ def _build_drive_service(scopes=None):
             'Faltan dependencias de Google Drive. Instale google-api-python-client y google-auth.'
         ) from e
 
-    creds = _credentials_drive_service_account(scopes)
+    creds = _credentials_drive_service_account(scopes, subject=subject)
     _drive_refresh_credentials_if_needed(creds)
     timeout_s = _drive_http_timeout_seconds()
     try:
@@ -1481,6 +1499,63 @@ def _nombre_archivo_sustento_vacaciones(dni, periodo):
     return f'Sustento_Vacaciones_{dni_s}_{per_s}.pdf'
 
 
+def _drive_http_error_reason(exc):
+    """Extrae motivo legible de un HttpError de la API de Drive."""
+    try:
+        import json
+        content = getattr(getattr(exc, 'resp', None), 'content', b'') or b''
+        if isinstance(content, bytes):
+            content = content.decode('utf-8', errors='replace')
+        if content:
+            data = json.loads(content)
+            err = data.get('error') or {}
+            return str(err.get('message') or err.get('status') or content)[:500]
+    except Exception:
+        pass
+    return str(exc)
+
+
+def _transferir_propiedad_archivo_drive(service, file_id, folder_id):
+    """
+    Las service accounts no tienen cuota en Mi unidad: tras crear el archivo,
+    transfiere la propiedad al dueño de la carpeta CONSTANCIASVAC (cuota del usuario).
+    """
+    try:
+        from googleapiclient.errors import HttpError
+    except Exception:
+        return
+
+    folder = service.files().get(
+        fileId=folder_id,
+        fields='owners(emailAddress)',
+        supportsAllDrives=True,
+    ).execute()
+    owners = folder.get('owners') or []
+    if not owners:
+        return
+    owner_email = str(owners[0].get('emailAddress') or '').strip()
+    if not owner_email:
+        return
+    try:
+        service.permissions().create(
+            fileId=file_id,
+            transferOwnership=True,
+            body={'type': 'user', 'role': 'owner', 'emailAddress': owner_email},
+            supportsAllDrives=True,
+        ).execute()
+        logging.info(
+            'Drive sustento: propiedad transferida a %s para file_id=%s',
+            owner_email,
+            file_id,
+        )
+    except HttpError as e:
+        logging.warning(
+            'Drive sustento: no se pudo transferir propiedad a %s: %s',
+            owner_email,
+            _drive_http_error_reason(e),
+        )
+
+
 def _subir_pdf_sustento_drive(folder_id, nombre_archivo, archivo_stream):
     """Sube un PDF a la carpeta de Drive indicada. Retorna file_id."""
     try:
@@ -1504,8 +1579,48 @@ def _subir_pdf_sustento_drive(folder_id, nombre_archivo, archivo_stream):
     )
 
     scopes = ['https://www.googleapis.com/auth/drive']
-    service = _build_drive_service(scopes)
-    media = MediaIoBaseUpload(archivo_stream, mimetype='application/pdf', resumable=True)
+    impersonate = _usuario_impersonacion_sustento_drive()
+    if impersonate:
+        logging.info('Drive sustento: subida con delegación a usuario %s', impersonate)
+        print(f'[Drive sustento] impersonate_user={impersonate!r}', flush=True)
+    else:
+        logging.info(
+            'Drive sustento: subida directa con service account (requiere unidad compartida o delegación)'
+        )
+    service = _build_drive_service(scopes, subject=impersonate or None)
+
+    try:
+        carpeta = service.files().get(
+            fileId=parent_id,
+            fields='id,name,mimeType,capabilities',
+            supportsAllDrives=True,
+        ).execute()
+        logging.info(
+            'Drive sustento: carpeta accesible id=%s name=%r canAddChildren=%s',
+            carpeta.get('id'),
+            carpeta.get('name'),
+            (carpeta.get('capabilities') or {}).get('canAddChildren'),
+        )
+        caps = carpeta.get('capabilities') or {}
+        if caps.get('canAddChildren') is False:
+            raise RuntimeError(
+                'La service account no tiene permiso para agregar archivos en esa carpeta. '
+                'Compártala como Editor con portal-minero-drive-access@portal-minero.iam.gserviceaccount.com'
+            )
+    except HttpError as e:
+        status = getattr(getattr(e, 'resp', None), 'status', None)
+        reason = _drive_http_error_reason(e)
+        logging.exception('Drive sustento: no se puede leer carpeta %s', parent_id)
+        if status == 404:
+            raise RuntimeError(
+                'Carpeta no encontrada (404). Verifique GOOGLE_DRIVE_FOLDER_SUSTENTO_VACACIONES '
+                f'(ID usado: {parent_id}).'
+            ) from e
+        raise RuntimeError(
+            f'No se puede acceder a la carpeta de sustentos (HTTP {status}): {reason}'
+        ) from e
+
+    media = MediaIoBaseUpload(archivo_stream, mimetype='application/pdf', resumable=False)
     metadata = {
         'name': nombre,
         'parents': [parent_id],
@@ -1515,32 +1630,53 @@ def _subir_pdf_sustento_drive(folder_id, nombre_archivo, archivo_stream):
             body=metadata,
             media_body=media,
             fields='id',
+            supportsAllDrives=True,
         ).execute()
     except HttpError as e:
         status = getattr(getattr(e, 'resp', None), 'status', None)
+        reason = _drive_http_error_reason(e)
         logging.exception(
-            'Drive sustento vacaciones HttpError status=%s parents=%r name=%r',
+            'Drive sustento vacaciones HttpError status=%s parents=%r name=%r reason=%s',
             status,
             parent_id,
             nombre,
+            reason,
         )
         print(
-            f'[Drive sustento] ERROR HttpError status={status} parents={parent_id!r}',
+            f'[Drive sustento] ERROR HttpError status={status} parents={parent_id!r} reason={reason!r}',
             flush=True,
         )
         if status == 404:
             raise RuntimeError(
-                'Carpeta de Google Drive no encontrada (404). En Render configure '
-                'GOOGLE_DRIVE_FOLDER_SUSTENTO_VACACIONES con el ID de la carpeta de sustentos '
-                'y compártala con la service account del JSON (rol Editor).'
+                'Carpeta de Google Drive no encontrada (404). Verifique '
+                'GOOGLE_DRIVE_FOLDER_SUSTENTO_VACACIONES y el ID de CONSTANCIASVAC.'
+            ) from e
+        if status == 403 and (
+            'storageQuotaExceeded' in reason
+            or 'storage quota' in reason.lower()
+            or 'do not have storage quota' in reason.lower()
+        ):
+            raise RuntimeError(
+                'Google Drive: la service account no tiene cuota para crear archivos en Mi unidad '
+                f'({reason}). Soluciones: (1) Mover CONSTANCIASVAC a una unidad compartida de Google '
+                'Workspace y actualizar GOOGLE_DRIVE_FOLDER_SUSTENTO_VACACIONES; o (2) Si tiene Google '
+                'Workspace, definir GOOGLE_DRIVE_SUSTENTO_IMPERSONATE_USER con el correo del dueño de la '
+                'carpeta y habilitar delegación de dominio para la service account en Admin de Google.'
+            ) from e
+        if status == 403:
+            raise RuntimeError(
+                f'Google Drive rechazó la subida (403): {reason}'
             ) from e
         raise RuntimeError(
-            f'Error al subir a Google Drive (HTTP {status}). Revise la carpeta y permisos de la service account.'
+            f'Error al subir a Google Drive (HTTP {status}): {reason}'
         ) from e
 
     file_id = str(created.get('id') or '').strip()
     if not file_id:
         raise RuntimeError('Drive no devolvió el identificador del archivo subido.')
+
+    if not impersonate:
+        _transferir_propiedad_archivo_drive(service, file_id, parent_id)
     logging.info('Drive sustento vacaciones: archivo creado file_id=%s', file_id)
     return file_id
 
