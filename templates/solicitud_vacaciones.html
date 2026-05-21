@@ -1,0 +1,402 @@
+{% extends "layout.html" %}
+
+{% block title %}Solicitud de vacaciones{% endblock %}
+
+{% block extra_css %}
+<style>
+    .kpi-card {
+        border: 0;
+        border-radius: 0.85rem;
+        box-shadow: 0 0.125rem 0.5rem rgba(15, 23, 42, 0.08);
+    }
+
+    .kpi-label {
+        font-size: 0.78rem;
+        letter-spacing: 0.02em;
+        color: #64748b;
+        margin-bottom: 0.25rem;
+    }
+
+    .readonly-soft {
+        background-color: #f1f5f9;
+    }
+
+    .days-counter {
+        border: 1px solid #dbeafe;
+        background: #eff6ff;
+        border-radius: 0.75rem;
+        padding: 0.65rem 0.85rem;
+        text-align: center;
+    }
+
+    .days-counter-label {
+        margin: 0;
+        font-size: 0.72rem;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+        color: #64748b;
+    }
+
+    .days-counter-value {
+        margin: 0;
+        font-size: 1.55rem;
+        font-weight: 700;
+        color: #0f172a;
+        line-height: 1.1;
+    }
+
+    .days-counter.is-invalid {
+        border-color: #dc3545;
+        background: #fff1f2;
+    }
+
+    .form-label-compact {
+        font-size: 0.78rem;
+        font-weight: 700;
+        color: #64748b;
+        margin-bottom: 0.35rem;
+    }
+
+    .form-control,
+    .form-select {
+        min-height: 2.4rem;
+    }
+
+    .table-solicitudes th {
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        color: #475569;
+        white-space: nowrap;
+    }
+
+    .table-solicitudes td {
+        vertical-align: middle;
+    }
+
+    @media (max-width: 768px) {
+        .table-solicitudes thead {
+            display: none;
+        }
+
+        .table-solicitudes,
+        .table-solicitudes tbody,
+        .table-solicitudes tr,
+        .table-solicitudes td {
+            display: block;
+            width: 100%;
+        }
+
+        .table-solicitudes tr {
+            border: 1px solid #e2e8f0;
+            border-radius: 0.65rem;
+            margin-bottom: 0.75rem;
+            background: #fff;
+            box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+        }
+
+        .table-solicitudes td {
+            border: 0 !important;
+            border-bottom: 1px dashed #e2e8f0 !important;
+            padding: 0.55rem 0.75rem;
+            text-align: right;
+            min-height: 2.3rem;
+        }
+
+        .table-solicitudes td:last-child {
+            border-bottom: 0 !important;
+        }
+
+        .table-solicitudes td::before {
+            content: attr(data-label);
+            float: left;
+            font-weight: 700;
+            color: #334155;
+            margin-right: 0.75rem;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row g-3 g-lg-4">
+    <div class="col-12 col-md-5 col-lg-4">
+        <div class="row g-2 mb-3">
+            <div class="col-12 col-md-4">
+                <div class="card kpi-card h-100">
+                    <div class="card-body py-3">
+                        <p class="kpi-label">Días Totales <span class="text-muted fw-normal">(ejercicio)</span></p>
+                        <div class="fs-3 fw-bold text-primary" id="kpiTotal">{{ kpi_total }}</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-12 col-md-4">
+                <div class="card kpi-card h-100">
+                    <div class="card-body py-3">
+                        <p class="kpi-label">Consumidos / Solicitados</p>
+                        <div class="fs-3 fw-bold text-warning" id="kpiConsumidos">{{ kpi_consumidos }}</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-12 col-md-4">
+                <div class="card kpi-card h-100">
+                    <div class="card-body py-3">
+                        <p class="kpi-label">Disponibles</p>
+                        <div class="fs-3 fw-bold text-success" id="kpiDisponibles">{{ kpi_disponibles }}</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-header bg-white border-0 pt-3">
+                <h5 class="mb-0 fw-bold text-secondary">
+                    <i class="bi bi-calendar2-week me-2"></i>Solicitud de vacaciones
+                </h5>
+            </div>
+            <div class="card-body pt-2">
+                <form method="post" id="frmSolicitudVacaciones" novalidate>
+                    <div class="row g-2 mb-2">
+                        <div class="col-6">
+                            <label for="controlyear" class="form-label-compact">
+                                <i class="bi bi-calendar3 me-1"></i>Ejercicio
+                            </label>
+                            <select class="form-select form-select-sm" id="controlyear" name="controlyear" required>
+                                {% for y in years %}
+                                <option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-6">
+                            <div id="daysCounter" class="days-counter">
+                                <p class="days-counter-label">Días seleccionados</p>
+                                <p class="days-counter-value"><span id="daysCounterValue">0</span> días</p>
+                            </div>
+                            <input type="hidden" id="days" name="days" value="0">
+                            <div id="daysInvalidFeedback" class="invalid-feedback d-none">
+                                Los días solicitados superan su saldo disponible.
+                            </div>
+                            <div id="overlapInvalidFeedback" class="invalid-feedback d-none">
+                                El rango de fechas se cruza con otra solicitud registrada.
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row g-2 mb-3">
+                        <div class="col-6">
+                            <label for="date_begin" class="form-label-compact">
+                                <i class="bi bi-calendar-date me-1"></i>Fecha inicio
+                            </label>
+                            <input type="date" class="form-control form-control-sm" id="date_begin" name="date_begin" required>
+                        </div>
+                        <div class="col-6">
+                            <label for="date_end" class="form-label-compact">
+                                <i class="bi bi-calendar-date-fill me-1"></i>Fecha fin
+                            </label>
+                            <input type="date" class="form-control form-control-sm" id="date_end" name="date_end" required>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="comments" class="form-label-compact">
+                            <i class="bi bi-chat-left-text me-1"></i>Comentarios
+                        </label>
+                        <textarea class="form-control form-control-sm" id="comments" name="comments" rows="3" maxlength="255" placeholder="Detalle breve del motivo o observaciones para aprobación..."></textarea>
+                    </div>
+
+                    <div class="d-grid">
+                        <button type="submit" id="btnEnviarSolicitud" class="btn btn-primary shadow-sm py-2 fw-semibold w-100">
+                            <i class="bi bi-send-check me-1"></i>Enviar solicitud
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-md-7 col-lg-8">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-header bg-white border-0 pt-3">
+                <h5 class="mb-0 fw-bold text-secondary">
+                    <i class="bi bi-clock-history me-2"></i>Historial de solicitudes
+                </h5>
+            </div>
+            <div class="card-body pt-2">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle table-solicitudes mb-0">
+                        <thead>
+                            <tr>
+                                <th>Ejercicio</th>
+                                <th>Inicio</th>
+                                <th>Fin</th>
+                                <th>Días</th>
+                                <th class="text-end">Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tbodyHistorialVacaciones">
+                            {% for row in historial %}
+                            <tr>
+                                <td data-label="Ejercicio">{{ row.control_year }}</td>
+                                <td data-label="Inicio">{{ row.date_begin|fecha }}</td>
+                                <td data-label="Fin">{{ row.date_end|fecha }}</td>
+                                <td data-label="Días">{{ row.days }}</td>
+                                <td data-label="Acciones" class="text-end">
+                                    {% if row.can_delete %}
+                                    <form method="post" class="d-inline"
+                                          onsubmit="return confirm('¿Eliminar esta solicitud de vacaciones?');">
+                                        <input type="hidden" name="action" value="delete">
+                                        <input type="hidden" name="solicitud_id" value="{{ row.id }}">
+                                        <input type="hidden" name="controlyear" value="{{ selected_year }}">
+                                        <button type="submit" class="btn btn-sm btn-outline-danger"
+                                                title="Eliminar solicitud" aria-label="Eliminar solicitud">
+                                            <i class="bi bi-trash"></i>
+                                        </button>
+                                    </form>
+                                    {% else %}
+                                    <span class="text-muted">—</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="5" class="text-center text-muted py-4">No hay solicitudes registradas para este ejercicio.</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const dateBegin = document.getElementById('date_begin');
+    const dateEnd = document.getElementById('date_end');
+    const daysInput = document.getElementById('days');
+    const daysCounter = document.getElementById('daysCounter');
+    const daysCounterValue = document.getElementById('daysCounterValue');
+    const daysInvalidFeedback = document.getElementById('daysInvalidFeedback');
+    const overlapInvalidFeedback = document.getElementById('overlapInvalidFeedback');
+    const btnEnviar = document.getElementById('btnEnviarSolicitud');
+    const cboYear = document.getElementById('controlyear');
+    const kpiTotal = document.getElementById('kpiTotal');
+    const kpiConsumidos = document.getElementById('kpiConsumidos');
+    const kpiDisponibles = document.getElementById('kpiDisponibles');
+    const tbodyHistorial = document.getElementById('tbodyHistorialVacaciones');
+    const urlApiEjercicio = {{ url_for('api_solicitud_vacaciones_ejercicio') | tojson }};
+    const selectedYear = {{ selected_year | tojson }};
+    let disponibles = Number({{ kpi_disponibles|int }}) || 0;
+    const rangosVacaciones = {{ rangos_vacaciones | tojson }};
+
+    function toDate(value) {
+        if (!value) return null;
+        const d = new Date(value + 'T00:00:00');
+        return Number.isNaN(d.getTime()) ? null : d;
+    }
+
+    function rangosSeCruzan(ini, fin) {
+        if (!ini || !fin) return false;
+        const tIni = ini.getTime();
+        const tFin = fin.getTime();
+        for (const r of rangosVacaciones) {
+            const rIni = toDate(r.begin);
+            const rFin = toDate(r.end);
+            if (!rIni || !rFin) continue;
+            if (rIni.getTime() <= tFin && rFin.getTime() >= tIni) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function calcularDias() {
+        const ini = toDate(dateBegin.value);
+        const fin = toDate(dateEnd.value);
+        let dias = 0;
+        let excedeSaldo = false;
+        let cruzaRango = false;
+        let rangoInvalido = false;
+
+        if (ini && fin) {
+            const diff = Math.floor((fin - ini) / 86400000) + 1;
+            if (diff > 0) {
+                dias = diff;
+                excedeSaldo = dias > disponibles;
+                cruzaRango = rangosSeCruzan(ini, fin);
+            } else {
+                rangoInvalido = true;
+            }
+        }
+
+        const invalido = excedeSaldo || cruzaRango || rangoInvalido;
+        daysInput.value = dias;
+        daysCounterValue.textContent = String(dias);
+        daysCounter.classList.toggle('is-invalid', invalido);
+        daysInvalidFeedback.classList.toggle('d-none', !excedeSaldo);
+        overlapInvalidFeedback.classList.toggle('d-none', !cruzaRango);
+        btnEnviar.disabled = invalido || dias <= 0;
+    }
+
+    function renderHistorial(rows, year) {
+        if (!tbodyHistorial) return;
+        if (!rows || !rows.length) {
+            tbodyHistorial.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">No hay solicitudes registradas para este ejercicio.</td></tr>';
+            return;
+        }
+        tbodyHistorial.innerHTML = rows.map(function (row) {
+            const deleteForm = row.can_delete
+                ? '<form method="post" class="d-inline" onsubmit="return confirm(\'¿Eliminar esta solicitud de vacaciones?\');">' +
+                  '<input type="hidden" name="action" value="delete">' +
+                  '<input type="hidden" name="solicitud_id" value="' + row.id + '">' +
+                  '<input type="hidden" name="controlyear" value="' + year + '">' +
+                  '<button type="submit" class="btn btn-sm btn-outline-danger" title="Eliminar solicitud" aria-label="Eliminar solicitud">' +
+                  '<i class="bi bi-trash"></i></button></form>'
+                : '<span class="text-muted">—</span>';
+            return '<tr>' +
+                '<td data-label="Ejercicio">' + (row.control_year || '') + '</td>' +
+                '<td data-label="Inicio">' + (row.date_begin || '') + '</td>' +
+                '<td data-label="Fin">' + (row.date_end || '') + '</td>' +
+                '<td data-label="Días">' + row.days + '</td>' +
+                '<td data-label="Acciones" class="text-end">' + deleteForm + '</td></tr>';
+        }).join('');
+    }
+
+    async function cargarDatosEjercicio(year) {
+        if (!year || !urlApiEjercicio) return;
+        try {
+            cboYear.disabled = true;
+            const res = await fetch(urlApiEjercicio + '?controlyear=' + encodeURIComponent(year));
+            const data = await res.json();
+            if (!res.ok) return;
+            kpiTotal.textContent = String(data.kpi_total);
+            kpiConsumidos.textContent = String(data.kpi_consumidos);
+            kpiDisponibles.textContent = String(data.kpi_disponibles);
+            disponibles = Number(data.kpi_disponibles) || 0;
+            renderHistorial(data.historial, year);
+            calcularDias();
+            const url = new URL(window.location.href);
+            url.searchParams.set('controlyear', year);
+            window.history.replaceState({}, '', url);
+        } catch (e) {
+            console.warn('solicitud vacaciones ejercicio:', e);
+        } finally {
+            cboYear.disabled = false;
+        }
+    }
+
+    if (cboYear) {
+        cboYear.addEventListener('change', function () {
+            cargarDatosEjercicio(this.value);
+        });
+    }
+
+    dateBegin.addEventListener('change', calcularDias);
+    dateEnd.addEventListener('change', calcularDias);
+    calcularDias();
+});
+</script>
+{% endblock %}

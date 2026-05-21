@@ -98,7 +98,7 @@
             max-width: 100%;
             width: auto;
             height: auto;
-            max-height: 72px;
+            max-height: 90px;
             object-fit: contain;
             transition: max-height 0.3s ease, max-width 0.3s ease;
             filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.35)) brightness(1.05);
@@ -186,8 +186,8 @@
         }
 
         body.sidebar-collapsed .sidebar-logo-wrap img {
-            max-height: 36px;
-            max-width: 48px;
+            max-height: 45px;
+            max-width: 60px;
         }
 
         body.sidebar-collapsed .sidebar-toggle-btn .bi-chevron-left {
@@ -287,7 +287,7 @@
 
             body.sidebar-collapsed .sidebar-logo-wrap img,
             .sidebar-logo-wrap img {
-                max-height: 56px;
+                max-height: 70px;
                 max-width: 100%;
             }
 
@@ -328,12 +328,14 @@
 
             <div class="sidebar-nav-scroll">
                 <ul class="list-unstyled components mb-0">
-                    <li class="{{ 'active' if request.endpoint == 'dashboard' or (session.get('simple_profile') and request.endpoint == 'mis_documentos_simple_page') else '' }}">
+                    {% if session.get('simple_profile') %}
+                    <li class="{{ 'active' if request.endpoint == 'dashboard' or request.endpoint == 'mis_documentos_simple_page' else '' }}">
                         <a href="{{ url_for('dashboard') }}" class="sidebar-link" title="Dashboard">
                             <i class="bi bi-speedometer2 sidebar-icon" aria-hidden="true"></i>
                             <span class="sidebar-link-text">Dashboard</span>
                         </a>
                     </li>
+                    {% endif %}
 
                     <li class="py-0">
                         <p class="sidebar-section-title text-uppercase fw-bold opacity-50">Configuración</p>
@@ -350,6 +352,13 @@
                         <a href="{{ url_for('carga_documentos') }}" class="sidebar-link" title="Cargar documentos">
                             <i class="bi bi-cloud-upload sidebar-icon" aria-hidden="true"></i>
                             <span class="sidebar-link-text">Cargar documentos</span>
+                        </a>
+                    </li>
+
+                    <li class="{{ 'active' if request.endpoint == 'solicitud_vacaciones_page' else '' }}">
+                        <a href="{{ url_for('solicitud_vacaciones_page') }}" class="sidebar-link" title="Solicitud de vacaciones">
+                            <i class="bi bi-send-check sidebar-icon" aria-hidden="true"></i>
+                            <span class="sidebar-link-text">Solicitud de vacaciones</span>
                         </a>
                     </li>
 
