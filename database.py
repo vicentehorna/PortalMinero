@@ -1476,6 +1476,62 @@ def eliminar_solicitud_vacaciones(company, person, solicitud_id):
                 pass
 
 
+def aprobar_solicitud_vacaciones_con_sustento(solicitud_id, company, approval_user, drive_file_id):
+    """
+    Aprueba solicitud pendiente y registra el file_id de Drive en Comments (SUSTENTO_DRIVE:...).
+    Retorna True si actualizó una fila.
+    """
+    conn = None
+    try:
+        sid = int(solicitud_id)
+        drive_id = str(drive_file_id or '').strip()
+        if not drive_id:
+            return False
+        comments = f'SUSTENTO_DRIVE:{drive_id}'
+        conn = DatabaseConfig.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE PR_SolicitudVacaciones
+            SET status = 'A',
+                ApprovalUser = ?,
+                ApprovalDate = GETDATE(),
+                Comments = ?,
+                xlastuser = ?,
+                xlastdate = CONVERT(varchar(19), GETDATE(), 120)
+            WHERE Id = ?
+              AND Company = ?
+              AND status = 'P'
+            """,
+            (
+                str(approval_user or '').strip()[:20],
+                comments[:255],
+                str(approval_user or '').strip()[:20],
+                sid,
+                str(company or '').strip(),
+            ),
+        )
+        ok = cursor.rowcount > 0
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return ok
+    except Exception as e:
+        print(f'Error en aprobar_solicitud_vacaciones_con_sustento: {e}')
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        return False
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 def get_resumen_solicitud_vacaciones(company, person, control_year, dias_totales=30):
     """Calcula días consumidos/solicitados (A+P) y disponibles del ejercicio."""
     conn = None

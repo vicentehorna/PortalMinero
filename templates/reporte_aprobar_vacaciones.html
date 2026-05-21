@@ -1,0 +1,549 @@
+{% extends "layout.html" %}
+
+{% block title %}Aprobar vacaciones{% endblock %}
+
+{% block extra_css %}
+<style>
+    .table-scroll-container {
+        max-height: 65vh;
+        overflow: auto;
+        border: 1px solid #dee2e6;
+    }
+
+    .table-planilla-vertical {
+        --sticky-col1-w: 5.75rem;
+        font-size: 11px;
+        white-space: nowrap;
+        margin-bottom: 0;
+    }
+
+    .table-planilla-vertical th,
+    .table-planilla-vertical td {
+        padding: 0.2rem 0.4rem;
+        vertical-align: middle;
+    }
+
+    .table-planilla-vertical thead th {
+        position: sticky;
+        top: 0;
+        background-color: #f8f9fa;
+        z-index: 2;
+        box-shadow: 0 1px 0 #dee2e6;
+    }
+
+    .table-planilla-vertical .sticky-col-1 {
+        position: sticky;
+        left: 0;
+        z-index: 1;
+        background-color: #fff;
+        min-width: var(--sticky-col1-w);
+        width: var(--sticky-col1-w);
+        max-width: var(--sticky-col1-w);
+        box-sizing: border-box;
+    }
+
+    .table-planilla-vertical .sticky-col-2 {
+        position: sticky;
+        left: var(--sticky-col1-w);
+        z-index: 1;
+        background-color: #fff;
+        min-width: 13rem;
+        max-width: 14rem;
+        box-sizing: border-box;
+    }
+
+    .table-planilla-vertical thead th.sticky-col-1,
+    .table-planilla-vertical thead th.sticky-col-2 {
+        z-index: 3;
+        background-color: #f8f9fa;
+    }
+
+    .vac-filtro-empleado .form-select {
+        min-width: 0;
+    }
+    @media (min-width: 992px) {
+        .vac-filtro-empleado .form-select {
+            min-width: 9.5rem;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="card shadow-sm border-0 mb-4">
+    <div class="card-header bg-white border-bottom-0 pt-4 pb-0">
+        <h5 class="mb-0 fw-bold text-secondary"><i class="bi bi-check2-square"></i> Aprobar vacaciones</h5>
+    </div>
+    <div class="card-body">
+        <form id="frmAprobarVacaciones" class="row g-2 g-lg-2 align-items-end">
+            <div class="col-12 col-md-4 col-lg-3">
+                <label for="cboCompania" class="form-label small fw-bold text-muted">Compañía</label>
+                <select id="cboCompania" class="form-select form-select-sm" required disabled
+                    title="Compañía de su sesión">
+                    <option value="{{ minero_compania_codigo }}" selected>{{ minero_compania_text }}</option>
+                </select>
+            </div>
+            <div class="col-12 col-sm-6 col-lg-4 vac-filtro-empleado">
+                <label for="cboTrabajador" class="form-label small fw-bold text-muted">Empleado
+                    <span class="fw-normal opacity-75">(opcional)</span>
+                </label>
+                <select id="cboTrabajador" class="form-select form-select-sm" disabled>
+                    <option value="">Todos (por defecto)</option>
+                </select>
+            </div>
+            <div class="col-6 col-sm-4 col-lg-2">
+                <label for="txtDni" class="form-label small fw-bold text-muted">DNI <span class="fw-normal opacity-75">(opcional)</span></label>
+                <input type="text" id="txtDni" class="form-control form-control-sm" placeholder="Buscar..." maxlength="20" autocomplete="off">
+            </div>
+            <div class="col-12 d-flex align-items-center flex-wrap gap-2 border-top pt-3 mt-3">
+                <button type="submit" class="btn btn-primary btn-sm px-4"><i class="bi bi-search"></i> Consultar</button>
+                <button type="button" class="btn btn-success btn-sm px-4" id="btnExportExcelAprobarVac" disabled><i class="bi bi-file-earmark-excel"></i> Exportar a Excel</button>
+                <span class="ms-auto text-muted small fw-bold">No. de Registros: <span id="lblRowCountAprobarVac">0</span></span>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card shadow-sm border-0 d-none" id="cardResultadoAprobarVac">
+    <div class="card-body">
+        <h4 class="text-center fw-bold mb-3">APROBAR VACACIONES</h4>
+        <div class="table-scroll-container">
+            <table class="table table-bordered table-sm table-hover table-planilla-vertical align-middle">
+                <thead id="thead-aprobar-vac"></thead>
+                <tbody id="tbody-aprobar-vac"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/filtros_reportes_planillas.js') }}"></script>
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', async function () {
+    const filtrosPersist = window.FiltrosPlanillasReportes && window.FiltrosPlanillasReportes.aprobarVacaciones
+        ? window.FiltrosPlanillasReportes.aprobarVacaciones()
+        : null;
+
+    const URL_REPORTE = {{ url_for('reporte_aprobar_vacaciones_post') | tojson }};
+    const COMPANIA_CODIGO = {{ (minero_compania_codigo or '') | tojson }};
+    const IDX_STICKY_1 = 0;
+    const IDX_STICKY_2 = 1;
+    const IDX_CENTRO = new Set([2, 3, 4, 5, 6]);
+    const URL_APROBAR_SUSTENTO = {{ url_for('aprobar_vacaciones_con_sustento') | tojson }};
+
+    let lastExportAprobarVac = null;
+    let lastRowsMetaAprobarVac = [];
+    let modalSustentoInst = null;
+
+    function escapeHtml(s) {
+        return String(s || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    function optionExists(select, value) {
+        if (!select || value === '' || value == null) return false;
+        const v = String(value);
+        return Array.from(select.options).some((o) => o.value === v);
+    }
+
+    function limpiarValorComboSiObsoleto(select) {
+        if (!select) return;
+        const v = String(select.value || '').trim();
+        if (!v) return;
+        const ok = Array.from(select.options).some((o) => String(o.value) === v);
+        if (!ok) select.value = '';
+    }
+
+    function etiquetaTrabajadorTodosPorDefecto(selectElement) {
+        if (!selectElement || !selectElement.options.length) return;
+        const o = selectElement.options[0];
+        if (o && o.value === '') o.textContent = 'Todos (por defecto)';
+    }
+
+    function fmtCelda(valor) {
+        if (valor === null || valor === undefined || valor === '') return '';
+        return String(valor);
+    }
+
+    function selectedText(id) {
+        const el = document.getElementById(id);
+        const opt = el && el.options[el.selectedIndex];
+        return opt ? opt.textContent.trim() : '';
+    }
+
+    function celdaAccionSustento(meta) {
+        if (!meta || !meta.can_upload) {
+            return '<span class="text-muted">—</span>';
+        }
+        const id = escapeHtml(meta.id);
+        const person = escapeHtml(meta.person);
+        const year = escapeHtml(meta.controlyear);
+        const nombre = escapeHtml(meta.name || '');
+        return '<span role="button" tabindex="0" class="btn-adjuntar-sustento" ' +
+            'data-solicitud-id="' + id + '" data-person-dni="' + person + '" ' +
+            'data-control-year="' + year + '" data-person-name="' + nombre + '" ' +
+            'title="Adjuntar sustento PDF y aprobar" aria-label="Adjuntar sustento y aprobar">' +
+            '<i class="bi bi-cloud-upload fs-5" style="cursor:pointer; color:#06b6d4;"></i></span>';
+    }
+
+    function abrirModalSustento(meta) {
+        if (!meta || !modalSustentoInst) return;
+        document.getElementById('sustentoSolicitudId').value = String(meta.id || '');
+        document.getElementById('sustentoPersonDni').value = String(meta.person || '');
+        document.getElementById('sustentoControlYear').value = String(meta.controlyear || '');
+        document.getElementById('sustento_pdf').value = '';
+        const errEl = document.getElementById('sustentoUploadError');
+        errEl.classList.add('d-none');
+        errEl.textContent = '';
+        const resumen = [
+            meta.person ? 'Código: ' + meta.person : '',
+            meta.name ? 'Nombre: ' + meta.name : '',
+            meta.controlyear ? 'Ejercicio: ' + meta.controlyear : '',
+        ].filter(Boolean).join(' · ');
+        document.getElementById('modalSustentoResumen').textContent = resumen || 'Solicitud #' + meta.id;
+        modalSustentoInst.show();
+    }
+
+    function renderizarTabla(response) {
+        const thead = document.getElementById('thead-aprobar-vac');
+        const tbody = document.getElementById('tbody-aprobar-vac');
+        const headersAll = response.headers || [];
+        const headersData = headersAll[headersAll.length - 1] === 'Acciones'
+            ? headersAll.slice(0, -1)
+            : headersAll;
+
+        let htmlHeaders = '<tr>';
+        headersAll.forEach((header, index) => {
+            let sticky = '';
+            if (index === IDX_STICKY_1) sticky = 'sticky-col-1';
+            else if (index === IDX_STICKY_2) sticky = 'sticky-col-2';
+            const cen = (IDX_CENTRO.has(index) || header === 'Acciones') ? ' text-center' : '';
+            htmlHeaders += `<th class="${sticky}${cen}">${escapeHtml(header)}</th>`;
+        });
+        htmlHeaders += '</tr>';
+        thead.innerHTML = htmlHeaders;
+
+        const filas = response.data || [];
+        lastRowsMetaAprobarVac = response.rows_meta || [];
+        let htmlBody = '';
+        filas.forEach((rowVals, rowIndex) => {
+            const meta = lastRowsMetaAprobarVac[rowIndex] || {};
+            htmlBody += '<tr>';
+            (rowVals || []).forEach((valor, index) => {
+                let sticky = '';
+                if (index === IDX_STICKY_1) sticky = 'sticky-col-1 font-monospace fw-bold';
+                else if (index === IDX_STICKY_2) sticky = 'sticky-col-2 text-truncate';
+                const align = IDX_CENTRO.has(index) ? 'text-center' : '';
+                htmlBody += `<td class="${[sticky, align].filter(Boolean).join(' ')}">${escapeHtml(fmtCelda(valor))}</td>`;
+            });
+            htmlBody += '<td class="text-center">' + celdaAccionSustento(meta) + '</td>';
+            htmlBody += '</tr>';
+        });
+
+        tbody.innerHTML = htmlBody;
+        document.getElementById('lblRowCountAprobarVac').textContent = String(filas.length);
+
+        tbody.querySelectorAll('.btn-adjuntar-sustento').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                abrirModalSustento({
+                    id: btn.getAttribute('data-solicitud-id'),
+                    person: btn.getAttribute('data-person-dni'),
+                    controlyear: btn.getAttribute('data-control-year'),
+                    name: btn.getAttribute('data-person-name'),
+                    can_upload: true,
+                });
+            });
+        });
+    }
+
+    async function exportAprobarVacExcel(payload, meta) {
+        if (typeof ExcelJS === 'undefined') {
+            alert('No se pudo cargar la librería de Excel (ExcelJS). Recargue la página e intente de nuevo.');
+            return;
+        }
+        const headersAll = payload.headers || [];
+        const headers = headersAll[headersAll.length - 1] === 'Acciones'
+            ? headersAll.slice(0, -1)
+            : headersAll;
+        const filas = payload.data || [];
+        const ncols = headers.length;
+        if (!ncols) return;
+
+        const F = {
+            title: 'FFE9ECEF',
+            meta: 'FFF8F9FA',
+            header: 'FFF8F9FA',
+            data: 'FFFFFFFF'
+        };
+        const fill = (argb) => ({ type: 'pattern', pattern: 'solid', fgColor: { argb } });
+        const borderThin = { style: 'thin', color: { argb: 'FFCCCCCC' } };
+        const allBorders = { top: borderThin, left: borderThin, bottom: borderThin, right: borderThin };
+        const alignCenter = { horizontal: 'center', vertical: 'middle' };
+
+        const wb = new ExcelJS.Workbook();
+        const ws = wb.addWorksheet('AprobarVacaciones', { views: [{ showGridLines: true }] });
+
+        let rowIdx = 1;
+        ws.mergeCells(rowIdx, 1, rowIdx, ncols);
+        const titleCell = ws.getCell(rowIdx, 1);
+        titleCell.value = 'APROBAR VACACIONES';
+        titleCell.font = { bold: true, size: 14 };
+        titleCell.alignment = alignCenter;
+        titleCell.fill = fill(F.title);
+        titleCell.border = allBorders;
+        ws.getRow(rowIdx).height = 26;
+        rowIdx++;
+
+        const metaRow = ws.addRow([
+            'Compañía', meta.compania || '',
+            'Empleado', meta.empleado || '',
+            'DNI', meta.dni || ''
+        ]);
+        metaRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+            if (colNumber <= 6) {
+                cell.fill = fill(F.meta);
+                cell.font = { bold: colNumber % 2 === 1 };
+                cell.alignment = alignCenter;
+            }
+            cell.border = allBorders;
+        });
+        rowIdx++;
+
+        ws.addRow([]);
+        rowIdx++;
+
+        const hRow = ws.addRow(headers);
+        hRow.font = { bold: true };
+        hRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+            const idx = colNumber - 1;
+            cell.fill = fill(F.header);
+            if (IDX_CENTRO.has(idx)) {
+                cell.alignment = alignCenter;
+            } else if (idx === IDX_STICKY_2) {
+                cell.alignment = { horizontal: 'left', vertical: 'middle' };
+            } else {
+                cell.alignment = alignCenter;
+            }
+            cell.border = allBorders;
+        });
+        rowIdx++;
+
+        filas.forEach((rowVals) => {
+            const r = ws.addRow(rowVals || []);
+            r.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+                const idx = colNumber - 1;
+                cell.fill = fill(F.data);
+                cell.border = allBorders;
+                if (IDX_CENTRO.has(idx)) {
+                    cell.alignment = alignCenter;
+                } else if (idx === IDX_STICKY_2) {
+                    cell.alignment = { horizontal: 'left', vertical: 'middle' };
+                } else {
+                    cell.alignment = alignCenter;
+                }
+            });
+            rowIdx++;
+        });
+
+        ws.getColumn(1).width = 12;
+        ws.getColumn(2).width = 36;
+        for (let c = 3; c <= ncols; c++) {
+            ws.getColumn(c).width = 14;
+        }
+
+        const buffer = await wb.xlsx.writeBuffer();
+        const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const safe = (s) => String(s || 'export').replace(/[\\/:*?"<>|]+/g, '_').trim().slice(0, 80);
+        const stamp = new Date().toISOString().slice(0, 10);
+        a.download = `aprobar_vacaciones_${safe(meta.compania)}_${stamp}.xlsx`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+    }
+
+    async function ejecutarConsulta() {
+        lastExportAprobarVac = null;
+        document.getElementById('btnExportExcelAprobarVac').disabled = true;
+        if (filtrosPersist) filtrosPersist.guardar();
+
+        const cia = document.getElementById('cboCompania').value.trim();
+        let person = document.getElementById('cboTrabajador').value.trim();
+        if (!person) person = '0';
+        const dni = document.getElementById('txtDni').value.trim();
+
+        try {
+            const res = await fetch(URL_REPORTE, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cia, person, dni })
+            });
+            const payload = await res.json();
+            if (!res.ok) {
+                document.getElementById('cardResultadoAprobarVac').classList.add('d-none');
+                document.getElementById('lblRowCountAprobarVac').textContent = '0';
+                alert(payload.error || 'Error al generar el reporte.');
+                return;
+            }
+            if (payload.error) {
+                document.getElementById('cardResultadoAprobarVac').classList.add('d-none');
+                document.getElementById('lblRowCountAprobarVac').textContent = '0';
+                alert(payload.error);
+                return;
+            }
+            if (!Array.isArray(payload.headers) || !Array.isArray(payload.data)) {
+                alert('Respuesta inválida del servidor.');
+                return;
+            }
+            document.getElementById('cardResultadoAprobarVac').classList.remove('d-none');
+            renderizarTabla(payload);
+            const headersResp = payload.headers || [];
+            lastExportAprobarVac = {
+                headers: headersResp[headersResp.length - 1] === 'Acciones'
+                    ? headersResp.slice(0, -1)
+                    : headersResp,
+                data: payload.data,
+                meta: {
+                    compania: selectedText('cboCompania'),
+                    empleado: selectedText('cboTrabajador') || 'Todos',
+                    dni: dni
+                }
+            };
+            document.getElementById('btnExportExcelAprobarVac').disabled = false;
+        } catch (e) {
+            console.error(e);
+            document.getElementById('cardResultadoAprobarVac').classList.add('d-none');
+            document.getElementById('btnExportExcelAprobarVac').disabled = true;
+            document.getElementById('lblRowCountAprobarVac').textContent = '0';
+            alert('Error de red o del servidor.');
+        }
+    }
+
+    const poblarSelect = async (url, selectElement) => {
+        selectElement.innerHTML = '';
+        const loading = document.createElement('option');
+        loading.value = '';
+        loading.textContent = 'Cargando...';
+        selectElement.appendChild(loading);
+        try {
+            const res = await fetch(url);
+            const data = await res.json();
+            selectElement.innerHTML = '';
+            const def = document.createElement('option');
+            def.value = '';
+            def.textContent = 'Todos (por defecto)';
+            selectElement.appendChild(def);
+            (Array.isArray(data) ? data : []).forEach((item) => {
+                const opt = document.createElement('option');
+                opt.value = item.id != null ? String(item.id) : '';
+                opt.textContent = item.text != null ? String(item.text) : '';
+                selectElement.appendChild(opt);
+            });
+            selectElement.disabled = false;
+            etiquetaTrabajadorTodosPorDefecto(selectElement);
+        } catch (err) {
+            console.error(err);
+            selectElement.innerHTML = '<option value="">Error</option>';
+        }
+    };
+
+    const cboCia = document.getElementById('cboCompania');
+    const cboTrabajador = document.getElementById('cboTrabajador');
+    const modalEl = document.getElementById('modalAdjuntarSustento');
+    if (modalEl && window.bootstrap) {
+        modalSustentoInst = bootstrap.Modal.getOrCreateInstance(modalEl);
+    }
+
+    const frmSustento = document.getElementById('frmAdjuntarSustento');
+    if (frmSustento) {
+        frmSustento.addEventListener('submit', async function (e) {
+            e.preventDefault();
+            const errEl = document.getElementById('sustentoUploadError');
+            const btn = document.getElementById('btnSubirAprobarSustento');
+            errEl.classList.add('d-none');
+            const fd = new FormData(frmSustento);
+            if (!fd.get('sustento_pdf') || !fd.get('sustento_pdf').name) {
+                errEl.textContent = 'Seleccione un archivo PDF.';
+                errEl.classList.remove('d-none');
+                return;
+            }
+            btn.disabled = true;
+            try {
+                const res = await fetch(URL_APROBAR_SUSTENTO, { method: 'POST', body: fd });
+                const data = await res.json();
+                if (!res.ok || data.error) {
+                    errEl.textContent = data.error || 'No se pudo completar la operación.';
+                    errEl.classList.remove('d-none');
+                    return;
+                }
+                if (modalSustentoInst) modalSustentoInst.hide();
+                alert(data.message || 'Solicitud aprobada correctamente.');
+                await ejecutarConsulta();
+            } catch (err) {
+                console.error(err);
+                errEl.textContent = 'Error de red o del servidor.';
+                errEl.classList.remove('d-none');
+            } finally {
+                btn.disabled = false;
+            }
+        });
+    }
+
+    async function cargarTrabajadores(cia) {
+        if (!cia) return;
+        await poblarSelect(`/api/selectores/trabajadores?cia=${encodeURIComponent(cia)}`, cboTrabajador);
+    }
+
+    const ciaFix = String(COMPANIA_CODIGO || '').trim();
+    if (ciaFix) {
+        await cargarTrabajadores(ciaFix);
+        if (filtrosPersist) {
+            const guardado = filtrosPersist.leer();
+            if (guardado) {
+                const person = String(guardado.person || '').trim();
+                if (person && optionExists(cboTrabajador, person)) {
+                    cboTrabajador.value = person;
+                }
+                const inpDni = document.getElementById('txtDni');
+                if (inpDni && guardado.dni != null) {
+                    inpDni.value = String(guardado.dni).trim();
+                }
+            }
+        }
+        await ejecutarConsulta();
+    }
+
+    if (filtrosPersist) {
+        filtrosPersist.registrarGuardadoEnCambio();
+    }
+
+    document.getElementById('frmAprobarVacaciones').addEventListener('submit', async function (e) {
+        e.preventDefault();
+        await ejecutarConsulta();
+    });
+
+    document.getElementById('btnExportExcelAprobarVac').addEventListener('click', async function () {
+        if (!lastExportAprobarVac || !lastExportAprobarVac.headers || !lastExportAprobarVac.headers.length) {
+            alert('Ejecute primero una búsqueda con resultados.');
+            return;
+        }
+        try {
+            await exportAprobarVacExcel(
+                { headers: lastExportAprobarVac.headers, data: lastExportAprobarVac.data },
+                lastExportAprobarVac.meta
+            );
+        } catch (err) {
+            console.error(err);
+            alert('No se pudo generar el archivo Excel.');
+        }
+    });
+});
+</script>
+{% endblock %}

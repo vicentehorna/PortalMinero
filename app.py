@@ -57,6 +57,7 @@ from database import (
     get_rangos_solicitud_vacaciones,
     registrar_solicitud_vacaciones,
     eliminar_solicitud_vacaciones,
+    aprobar_solicitud_vacaciones_con_sustento,
     solicitud_vacaciones_tiene_cruce,
     get_resumen_solicitud_vacaciones,
     get_max_dias_vacaciones,
@@ -166,6 +167,16 @@ def _refresh_documentos_alcance_session():
     session.pop('simple_lock_person', None)
     session.pop('simple_lock_person_name', None)
     session['simple_profile'] = False
+    session['general_profile'] = False
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        session['general_profile'] = User._tiene_perfil_general(cursor, current_user.id)
+        cursor.close()
+        conn.close()
+    except Exception:
+        logging.exception('_refresh_documentos_alcance_session general_profile')
 
     lock_minero = User.get_minero_lock_company(current_user.id)
     if lock_minero:
@@ -246,6 +257,45 @@ def _minero_reporte_template_context():
         'minero_compania_codigo': lock or '',
         'minero_compania_text': _descripcion_compania_selector(lock) if lock else '',
     }
+
+
+def _usuario_perfil_general_o_minero():
+    """True si el usuario tiene perfil GENERAL o MINERO."""
+    ensure_user_session()
+    return bool(session.get('general_profile') or session.get('minero_profile'))
+
+
+def _reporte_compania_usuario_logueado():
+    """Compañía del usuario logueado (bloqueo MINERO o company de sesión/login)."""
+    lock = _minero_effective_company_lock()
+    if lock:
+        return lock
+    return str(getattr(current_user, 'company', None) or session.get('company') or '').strip()
+
+
+def _reporte_aprobar_vacaciones_template_context():
+    """Filtros del reporte Aprobar Vacaciones: compañía fija del usuario logueado."""
+    ensure_user_session()
+    cia = _reporte_compania_usuario_logueado()
+    return {
+        'minero_restringe_compania': True,
+        'minero_compania_codigo': cia,
+        'minero_compania_text': _descripcion_compania_selector(cia) if cia else cia,
+        'simple_restringe_trabajador': False,
+        'simple_trabajador_codigo': '',
+        'simple_trabajador_nombre': '',
+    }
+
+
+def _status_vacaciones_reporte_text(status_code):
+    code = str(status_code or '').strip().upper()
+    if code == 'A':
+        return 'Aprobado'
+    if code == 'R':
+        return 'Rechazado'
+    if code == 'P':
+        return 'Pendiente'
+    return str(status_code or '').strip()
 
 
 def _reporte_filtros_perfil_template_context():
@@ -1291,7 +1341,7 @@ def _listar_archivos_pdf_drive(folder_id):
         raise _runtime_error_google_api(e) from e
 
 
-def _credentials_drive_service_account():
+def _credentials_drive_service_account(scopes=None):
     """
     Credenciales OAuth de la service account para la API de Drive.
 
@@ -1307,7 +1357,7 @@ def _credentials_drive_service_account():
             'Faltan dependencias de Google Drive. Instale google-api-python-client y google-auth.'
         ) from e
 
-    scopes = ['https://www.googleapis.com/auth/drive.readonly']
+    scopes = scopes or ['https://www.googleapis.com/auth/drive.readonly']
 
     for env_name in ('GOOGLE_DRIVE_CREDENTIALS_JSON', 'GOOGLE_SERVICE_ACCOUNT_JSON'):
         raw = str(os.getenv(env_name) or '').strip()
@@ -1336,7 +1386,7 @@ def _credentials_drive_service_account():
     return service_account.Credentials.from_service_account_file(cred_path, scopes=scopes)
 
 
-def _build_drive_service():
+def _build_drive_service(scopes=None):
     """
     Cliente Drive (service account). Refresca token con requests si aplica y usa AuthorizedHttp con timeout
     largo para reducir timeouts intermitentes (WinError 10060) en redes lentas o firewalls lentos.
@@ -1348,7 +1398,7 @@ def _build_drive_service():
             'Faltan dependencias de Google Drive. Instale google-api-python-client y google-auth.'
         ) from e
 
-    creds = _credentials_drive_service_account()
+    creds = _credentials_drive_service_account(scopes)
     _drive_refresh_credentials_if_needed(creds)
     timeout_s = _drive_http_timeout_seconds()
     try:
@@ -1391,6 +1441,40 @@ def _descargar_archivo_drive(file_id):
     nombre = str(meta.get('name') or f'{file_id}.pdf')
     mime = str(meta.get('mimeType') or 'application/pdf')
     return fh, nombre, mime
+
+
+def _nombre_archivo_sustento_vacaciones(dni, periodo):
+    """Nombre en Drive: Sustento_Vacaciones_[DNI]_[Periodo].pdf"""
+    dni_s = re.sub(r'[^\w\-]+', '_', str(dni or '').strip())[:40] or 'SIN_DNI'
+    per_s = re.sub(r'[^\w\-]+', '_', str(periodo or '').strip())[:20] or 'SIN_PERIODO'
+    return f'Sustento_Vacaciones_{dni_s}_{per_s}.pdf'
+
+
+def _subir_pdf_sustento_drive(folder_id, nombre_archivo, archivo_stream):
+    """Sube un PDF a la carpeta de Drive indicada. Retorna file_id."""
+    try:
+        from googleapiclient.http import MediaIoBaseUpload
+    except Exception as e:
+        raise RuntimeError(
+            'Falta google-api-python-client para subir archivos a Drive.'
+        ) from e
+
+    scopes = ['https://www.googleapis.com/auth/drive']
+    service = _build_drive_service(scopes)
+    media = MediaIoBaseUpload(archivo_stream, mimetype='application/pdf', resumable=True)
+    metadata = {
+        'name': str(nombre_archivo or 'Sustento_Vacaciones.pdf').strip(),
+        'parents': [str(folder_id).strip()],
+    }
+    created = service.files().create(
+        body=metadata,
+        media_body=media,
+        fields='id',
+    ).execute()
+    file_id = str(created.get('id') or '').strip()
+    if not file_id:
+        raise RuntimeError('Drive no devolvió el identificador del archivo subido.')
+    return file_id
 
 
 def _normalizar_folder_id_drive(valor):
@@ -1605,6 +1689,19 @@ def reporte_planilla_vertical_page():
 @login_required
 def reporte_vacaciones_detalle_page():
     return render_template('reporte_vacaciones_detalle.html', **_reporte_filtros_perfil_template_context())
+
+
+@app.route('/reporte-aprobar-vacaciones')
+@login_required
+def reporte_aprobar_vacaciones_page():
+    ensure_user_session()
+    if not _usuario_perfil_general_o_minero():
+        flash('No tiene permiso para acceder a Aprobar Vacaciones.', 'warning')
+        return redirect(_url_inicio_portal())
+    return render_template(
+        'reporte_aprobar_vacaciones.html',
+        **_reporte_aprobar_vacaciones_template_context(),
+    )
 
 
 @app.route('/reporte-saldo-vacaciones')
@@ -2686,6 +2783,149 @@ def reporte_planilla_vertical_post():
                 conn.close()
             except Exception:
                 pass
+
+
+@app.route('/reporte_aprobar_vacaciones', methods=['POST'])
+@login_required
+def reporte_aprobar_vacaciones_post():
+    """sp_pr_aprobarvacaciones_web @cia, @person, @dni."""
+    ensure_user_session()
+    if not _usuario_perfil_general_o_minero():
+        return jsonify({'error': 'No autorizado.'}), 403
+
+    body = request.get_json(silent=True) or {}
+    cia = _reporte_compania_usuario_logueado()
+    if not cia:
+        cia = str(body.get('cia') or '').strip()
+    person = str(body.get('person') or '0').strip() or '0'
+    dni = str(body.get('dni') or '').strip()
+
+    if not cia:
+        return jsonify({'error': 'No se pudo identificar la compañía del usuario.'}), 400
+
+    headers_es = [
+        'Código',
+        'Nombre',
+        'Ejercicio',
+        'Fecha inicio',
+        'Fecha fin',
+        'Estado',
+        'Fecha aprobación',
+    ]
+    keys_datos = [
+        'person',
+        'name',
+        'controlyear',
+        'datebegin',
+        'dateend',
+        'status',
+        'approvaldate',
+    ]
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            'EXEC sp_pr_aprobarvacaciones_web @cia=?, @person=?, @dni=?',
+            (cia, person, dni),
+        )
+        rows = _dicts_first_nonempty_resultset(cursor)
+        resultado = []
+        rows_meta = []
+        for r in rows:
+            status_code = str(r.get('status') or '').strip().upper() or 'P'
+            fila = []
+            for key in keys_datos:
+                val = r.get(key)
+                if key == 'status':
+                    fila.append(_status_vacaciones_reporte_text(val))
+                elif key in ('datebegin', 'dateend', 'approvaldate'):
+                    fila.append(fecha_filter(val))
+                else:
+                    fila.append(_jsonable_value(val))
+            resultado.append(fila)
+            rows_meta.append({
+                'id': _jsonable_value(r.get('id')),
+                'person': str(r.get('person') or '').strip(),
+                'name': str(r.get('name') or '').strip(),
+                'controlyear': str(r.get('controlyear') or '').strip(),
+                'status': status_code,
+                'can_upload': status_code == 'P',
+            })
+        headers_es.append('Acciones')
+        return jsonify({'headers': headers_es, 'data': resultado, 'rows_meta': rows_meta})
+    except Exception as e:
+        logging.exception('reporte_aprobar_vacaciones_post')
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+@app.route('/aprobar-vacaciones-con-sustento', methods=['POST'])
+@login_required
+def aprobar_vacaciones_con_sustento():
+    """Sube PDF de sustento a Drive y aprueba la solicitud (status A)."""
+    ensure_user_session()
+    if not _usuario_perfil_general_o_minero():
+        return jsonify({'error': 'No autorizado.'}), 403
+
+    solicitud_id = request.form.get('solicitud_id')
+    person_dni = str(request.form.get('person_dni') or request.form.get('person') or '').strip()
+    control_year = str(request.form.get('control_year') or request.form.get('controlyear') or '').strip()
+    company = _reporte_compania_usuario_logueado()
+    archivo = request.files.get('sustento_pdf')
+
+    if not solicitud_id:
+        return jsonify({'error': 'Solicitud no indicada.'}), 400
+    if not company:
+        return jsonify({'error': 'No se pudo identificar la compañía.'}), 400
+    if not archivo or not archivo.filename:
+        return jsonify({'error': 'Seleccione un archivo PDF de sustento.'}), 400
+
+    nombre_orig = str(archivo.filename or '').strip().lower()
+    if not nombre_orig.endswith('.pdf'):
+        return jsonify({'error': 'El sustento debe ser un archivo PDF.'}), 400
+
+    folder_raw = _ruta_carga_documentos_efectiva(current_user.id)
+    folder_id = _normalizar_folder_id_drive(folder_raw)
+    if not folder_id:
+        return jsonify({
+            'error': 'Configure el ID o URL de carpeta de Google Drive en Configuración por usuario.',
+        }), 400
+
+    try:
+        nombre_drive = _nombre_archivo_sustento_vacaciones(person_dni, control_year)
+        try:
+            archivo.stream.seek(0)
+        except Exception:
+            pass
+        file_id = _subir_pdf_sustento_drive(folder_id, nombre_drive, archivo.stream)
+        ok = aprobar_solicitud_vacaciones_con_sustento(
+            solicitud_id=solicitud_id,
+            company=company,
+            approval_user=current_user.id,
+            drive_file_id=file_id,
+        )
+        if not ok:
+            return jsonify({
+                'error': 'No se pudo aprobar la solicitud (ya fue procesada o no existe).',
+            }), 409
+        return jsonify({
+            'ok': True,
+            'message': 'Solicitud aprobada y sustento cargado en Google Drive.',
+            'drive_file_id': file_id,
+            'file_name': nombre_drive,
+        })
+    except RuntimeError as e:
+        return jsonify({'error': str(e)}), 500
+    except Exception as e:
+        logging.exception('aprobar_vacaciones_con_sustento')
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/reporte_vacaciones_detalle', methods=['POST'])

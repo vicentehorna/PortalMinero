@@ -380,6 +380,15 @@
                         </a>
                     </li>
 
+                    {% if session.get('general_profile') or session.get('minero_profile') %}
+                    <li class="{{ 'active' if request.endpoint == 'reporte_aprobar_vacaciones_page' else '' }}">
+                        <a href="{{ url_for('reporte_aprobar_vacaciones_page') }}" class="sidebar-link" title="Aprobar vacaciones">
+                            <i class="bi bi-check2-square sidebar-icon" aria-hidden="true"></i>
+                            <span class="sidebar-link-text">Aprobar vacaciones</span>
+                        </a>
+                    </li>
+                    {% endif %}
+
                     {% if not session.get('simple_profile') %}
                     <li class="{{ 'active' if request.endpoint == 'reporte_documentos_personal_page' else '' }}">
                         <a href="{{ url_for('reporte_documentos_personal_page') }}" class="sidebar-link" title="Documentos del personal">
@@ -438,6 +447,39 @@
 
                 {% block content %}{% endblock %}
             </main>
+        </div>
+    </div>
+
+    <div class="modal fade" id="modalAdjuntarSustento" tabindex="-1" aria-labelledby="modalAdjuntarSustentoLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <form id="frmAdjuntarSustento" enctype="multipart/form-data" novalidate>
+                    <div class="modal-header border-0 pb-0">
+                        <h5 class="modal-title fw-bold text-secondary" id="modalAdjuntarSustentoLabel">
+                            <i class="bi bi-cloud-upload me-2"></i>Adjuntar sustento y aprobar
+                        </h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p class="small text-muted mb-3" id="modalSustentoResumen">—</p>
+                        <input type="hidden" name="solicitud_id" id="sustentoSolicitudId" value="">
+                        <input type="hidden" name="person_dni" id="sustentoPersonDni" value="">
+                        <input type="hidden" name="control_year" id="sustentoControlYear" value="">
+                        <div class="mb-3">
+                            <label for="sustento_pdf" class="form-label small fw-bold text-muted">Documento PDF de sustento</label>
+                            <input type="file" class="form-control" id="sustento_pdf" name="sustento_pdf" accept=".pdf" required>
+                            <div class="form-text">Se subirá a la carpeta de Google Drive configurada en su usuario.</div>
+                        </div>
+                        <div id="sustentoUploadError" class="alert alert-danger py-2 small d-none" role="alert"></div>
+                    </div>
+                    <div class="modal-footer border-0 pt-0">
+                        <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+                        <button type="submit" class="btn btn-primary btn-sm" id="btnSubirAprobarSustento">
+                            <i class="bi bi-check2-circle me-1"></i>Subir y Aprobar
+                        </button>
+                    </div>
+                </form>
+            </div>
         </div>
     </div>
 
