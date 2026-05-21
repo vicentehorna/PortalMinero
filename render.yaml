@@ -3,6 +3,7 @@
 # SQL_SERVER, SQL_DATABASE, SQL_USER, SQL_PASSWORD, FLASK_SECRET_KEY, etc.
 # Google Drive (service account): GOOGLE_DRIVE_CREDENTIALS_JSON = contenido completo del JSON (secreto).
 #   Alternativa: GOOGLE_DRIVE_CREDENTIALS_FILE con ruta dentro del contenedor si monta el archivo.
+# Sustentos vacaciones (aprobación): GOOGLE_DRIVE_FOLDER_SUSTENTO_VACACIONES = ID o URL de carpeta Drive.
 
 services:
   - type: web

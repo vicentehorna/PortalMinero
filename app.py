@@ -1125,6 +1125,37 @@ def _ruta_carga_documentos_efectiva(user_id):
     return get_ruta_documentos_usuario(user_id)
 
 
+def _resolver_carpeta_sustento_vacaciones_drive(user_id):
+    """
+    Carpeta Drive fija para sustentos de vacaciones (CONSTANCIASVAC u otra).
+
+    Solo variables de entorno (Render / .env), independiente de SY_User.RutaDocumentos
+    que sigue usándose para boletas y sincronización de Cargar documentos.
+    """
+    for env_key in (
+        'GOOGLE_DRIVE_FOLDER_SUSTENTO_VACACIONES',
+        'DRIVE_FOLDER_SUSTENTO_VACACIONES',
+    ):
+        raw_env = str(os.getenv(env_key) or '').strip()
+        if raw_env:
+            folder_id = _normalizar_folder_id_drive(raw_env)
+            return {
+                'folder_id': folder_id,
+                'source': f'env:{env_key}',
+                'raw': raw_env,
+                'normalized': folder_id,
+                'user_id': str(user_id or ''),
+            }
+
+    return {
+        'folder_id': None,
+        'source': 'env:no_configurada',
+        'raw': '',
+        'normalized': None,
+        'user_id': str(user_id or ''),
+    }
+
+
 def _procesar_carga_desde_carpeta_local_respaldo(ruta_servidor):
     """
     Respaldo de lógica antigua (escaneo de carpeta local en servidor).
@@ -1453,27 +1484,64 @@ def _nombre_archivo_sustento_vacaciones(dni, periodo):
 def _subir_pdf_sustento_drive(folder_id, nombre_archivo, archivo_stream):
     """Sube un PDF a la carpeta de Drive indicada. Retorna file_id."""
     try:
+        from googleapiclient.errors import HttpError
         from googleapiclient.http import MediaIoBaseUpload
     except Exception as e:
         raise RuntimeError(
             'Falta google-api-python-client para subir archivos a Drive.'
         ) from e
 
+    parent_id = str(folder_id or '').strip()
+    nombre = str(nombre_archivo or 'Sustento_Vacaciones.pdf').strip()
+    logging.info(
+        'Drive sustento vacaciones: files().create parents=%r name=%r',
+        [parent_id] if parent_id else [],
+        nombre,
+    )
+    print(
+        f'[Drive sustento] parents (folder_id)={parent_id!r} file_name={nombre!r}',
+        flush=True,
+    )
+
     scopes = ['https://www.googleapis.com/auth/drive']
     service = _build_drive_service(scopes)
     media = MediaIoBaseUpload(archivo_stream, mimetype='application/pdf', resumable=True)
     metadata = {
-        'name': str(nombre_archivo or 'Sustento_Vacaciones.pdf').strip(),
-        'parents': [str(folder_id).strip()],
+        'name': nombre,
+        'parents': [parent_id],
     }
-    created = service.files().create(
-        body=metadata,
-        media_body=media,
-        fields='id',
-    ).execute()
+    try:
+        created = service.files().create(
+            body=metadata,
+            media_body=media,
+            fields='id',
+        ).execute()
+    except HttpError as e:
+        status = getattr(getattr(e, 'resp', None), 'status', None)
+        logging.exception(
+            'Drive sustento vacaciones HttpError status=%s parents=%r name=%r',
+            status,
+            parent_id,
+            nombre,
+        )
+        print(
+            f'[Drive sustento] ERROR HttpError status={status} parents={parent_id!r}',
+            flush=True,
+        )
+        if status == 404:
+            raise RuntimeError(
+                'Carpeta de Google Drive no encontrada (404). En Render configure '
+                'GOOGLE_DRIVE_FOLDER_SUSTENTO_VACACIONES con el ID de la carpeta de sustentos '
+                'y compártala con la service account del JSON (rol Editor).'
+            ) from e
+        raise RuntimeError(
+            f'Error al subir a Google Drive (HTTP {status}). Revise la carpeta y permisos de la service account.'
+        ) from e
+
     file_id = str(created.get('id') or '').strip()
     if not file_id:
         raise RuntimeError('Drive no devolvió el identificador del archivo subido.')
+    logging.info('Drive sustento vacaciones: archivo creado file_id=%s', file_id)
     return file_id
 
 
@@ -2891,11 +2959,35 @@ def aprobar_vacaciones_con_sustento():
     if not nombre_orig.endswith('.pdf'):
         return jsonify({'error': 'El sustento debe ser un archivo PDF.'}), 400
 
-    folder_raw = _ruta_carga_documentos_efectiva(current_user.id)
-    folder_id = _normalizar_folder_id_drive(folder_raw)
+    carpeta_info = _resolver_carpeta_sustento_vacaciones_drive(current_user.id)
+    folder_id = carpeta_info.get('folder_id')
+    logging.info(
+        'Aprobar vacaciones sustento: user_id=%s source=%s raw=%r parents(normalized)=%r '
+        'solicitud_id=%s company=%s',
+        current_user.id,
+        carpeta_info.get('source'),
+        carpeta_info.get('raw'),
+        carpeta_info.get('normalized'),
+        solicitud_id,
+        company,
+    )
+    print(
+        '[Aprobar vacaciones sustento] '
+        f"source={carpeta_info.get('source')} "
+        f"raw={carpeta_info.get('raw')!r} "
+        f"parents={carpeta_info.get('normalized')!r} "
+        f"user_id={current_user.id}",
+        flush=True,
+    )
     if not folder_id:
         return jsonify({
-            'error': 'Configure el ID o URL de carpeta de Google Drive en Configuración por usuario.',
+            'error': (
+                'No hay carpeta de Drive para sustentos. En Render defina '
+                'GOOGLE_DRIVE_FOLDER_SUSTENTO_VACACIONES con el ID o URL de la carpeta '
+                '(ej. CONSTANCIASVAC), compartida con la service account.'
+            ),
+            'drive_folder_source': carpeta_info.get('source'),
+            'drive_folder_raw': carpeta_info.get('raw'),
         }), 400
 
     try:
