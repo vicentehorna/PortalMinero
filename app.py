@@ -58,6 +58,8 @@ from database import (
     registrar_solicitud_vacaciones,
     eliminar_solicitud_vacaciones,
     aprobar_solicitud_vacaciones_con_sustento,
+    obtener_sustento_drive_ids_por_solicitudes,
+    obtener_drive_file_id_sustento_vacaciones,
     solicitud_vacaciones_tiene_cruce,
     get_resumen_solicitud_vacaciones,
     get_max_dias_vacaciones,
@@ -1465,8 +1467,12 @@ def _descargar_archivo_drive(file_id):
         ) from e
 
     service = _build_drive_service()
-    meta = service.files().get(fileId=file_id, fields='name,mimeType').execute()
-    req = service.files().get_media(fileId=file_id)
+    meta = service.files().get(
+        fileId=file_id,
+        fields='name,mimeType',
+        supportsAllDrives=True,
+    ).execute()
+    req = service.files().get_media(fileId=file_id, supportsAllDrives=True)
     fh = io.BytesIO()
     downloader = MediaIoBaseDownload(fh, req)
     done = False
@@ -1540,11 +1546,21 @@ def _subir_pdf_sustento_drive(folder_id, nombre_archivo, archivo_stream):
             carpeta.get('name'),
             (carpeta.get('capabilities') or {}).get('canAddChildren'),
         )
+        drive_id = str(carpeta.get('driveId') or '').strip()
         print(
             f"[Drive sustento] carpeta verificada id={carpeta.get('id')} "
-            f"driveId={carpeta.get('driveId')!r}",
+            f"driveId={drive_id!r} es_unidad_compartida={bool(drive_id)}",
             flush=True,
         )
+        if not drive_id:
+            raise RuntimeError(
+                'La carpeta de GOOGLE_DRIVE_FOLDER_SUSTENTO_VACACIONES no está en una '
+                'Unidad compartida (Shared Drive): driveId vacío. Las service accounts no tienen '
+                'cuota en "Mi unidad" aunque la carpeta esté compartida como Editor. '
+                'Cree CONSTANCIASVAC dentro de Unidades compartidas (no en Mi unidad), copie el '
+                'ID nuevo de esa carpeta y actualice la variable en Render. '
+                f'ID actual configurado: {parent_id}'
+            )
         caps = carpeta.get('capabilities') or {}
         if caps.get('canAddChildren') is False:
             raise RuntimeError(
@@ -1599,9 +1615,23 @@ def _subir_pdf_sustento_drive(folder_id, nombre_archivo, archivo_stream):
                 'Carpeta no encontrada al subir (404). Actualice GOOGLE_DRIVE_FOLDER_SUSTENTO_VACACIONES '
                 'con el ID de la carpeta dentro de la unidad compartida.'
             ) from e
+        if status == 403 and (
+            'storageQuotaExceeded' in reason
+            or 'storage quota' in reason.lower()
+            or 'do not have storage quota' in reason.lower()
+        ):
+            raise RuntimeError(
+                'Google Drive: storageQuotaExceeded. La service account no puede crear archivos '
+                'en "Mi unidad" (sin cuota propia). Aunque use Workspace, el ID en '
+                'GOOGLE_DRIVE_FOLDER_SUSTENTO_VACACIONES debe ser una carpeta DENTRO de una '
+                'Unidad compartida (revise en logs driveId=...; si está vacío, el ID es de Mi unidad). '
+                'Si movió CONSTANCIASVAC a una unidad compartida, copie el ID nuevo de esa carpeta '
+                '(el ID antiguo 1CAnJBa_... de Mi unidad ya no sirve). '
+                f'Detalle API: {reason}'
+            ) from e
         if status == 403:
             raise RuntimeError(
-                f'Google Drive rechazó la subida en unidad compartida (403): {reason}'
+                f'Google Drive rechazó la subida (403): {reason}'
             ) from e
         raise RuntimeError(
             f'Error al subir a Google Drive (HTTP {status}): {reason}'
@@ -2974,6 +3004,17 @@ def reporte_aprobar_vacaciones_post():
             (cia, person, dni),
         )
         rows = _dicts_first_nonempty_resultset(cursor)
+        ids_aprobados = []
+        for r in rows:
+            if str(r.get('status') or '').strip().upper() == 'A':
+                rid = r.get('id')
+                if rid is not None:
+                    try:
+                        ids_aprobados.append(int(rid))
+                    except (TypeError, ValueError):
+                        pass
+        mapa_sustento = obtener_sustento_drive_ids_por_solicitudes(cia, ids_aprobados)
+
         resultado = []
         rows_meta = []
         for r in rows:
@@ -2988,13 +3029,20 @@ def reporte_aprobar_vacaciones_post():
                 else:
                     fila.append(_jsonable_value(val))
             resultado.append(fila)
+            sid = r.get('id')
+            try:
+                sid_int = int(sid) if sid is not None else None
+            except (TypeError, ValueError):
+                sid_int = None
+            tiene_sustento = bool(sid_int and mapa_sustento.get(sid_int))
             rows_meta.append({
-                'id': _jsonable_value(r.get('id')),
+                'id': _jsonable_value(sid),
                 'person': str(r.get('person') or '').strip(),
                 'name': str(r.get('name') or '').strip(),
                 'controlyear': str(r.get('controlyear') or '').strip(),
                 'status': status_code,
                 'can_upload': status_code == 'P',
+                'can_download': tiene_sustento,
             })
         headers_es.append('Acciones')
         return jsonify({'headers': headers_es, 'data': resultado, 'rows_meta': rows_meta})
@@ -3007,6 +3055,41 @@ def reporte_aprobar_vacaciones_post():
                 conn.close()
             except Exception:
                 pass
+
+
+@app.route('/sustento-vacaciones/descargar')
+@login_required
+def descargar_sustento_vacaciones():
+    """Descarga PDF de sustento desde Drive (file_id en Comments: SUSTENTO_DRIVE:...)."""
+    ensure_user_session()
+    if not _usuario_perfil_general_o_minero():
+        flash('No autorizado.', 'warning')
+        return redirect(url_for('reporte_aprobar_vacaciones_page'))
+
+    solicitud_id = request.args.get('solicitud_id')
+    company = _reporte_compania_usuario_logueado()
+    if not solicitud_id or not company:
+        flash('Solicitud o compañía no indicada.', 'error')
+        return redirect(url_for('reporte_aprobar_vacaciones_page'))
+
+    drive_id = obtener_drive_file_id_sustento_vacaciones(solicitud_id, company)
+    if not drive_id:
+        flash('No hay sustento PDF registrado para esta solicitud.', 'error')
+        return redirect(url_for('reporte_aprobar_vacaciones_page'))
+
+    try:
+        archivo_io, nombre_archivo, mime = _descargar_archivo_drive(drive_id)
+    except Exception as e:
+        logging.exception('descargar_sustento_vacaciones solicitud_id=%s', solicitud_id)
+        flash(_mensaje_error_descarga_drive(e), 'error')
+        return redirect(url_for('reporte_aprobar_vacaciones_page'))
+
+    return send_file(
+        archivo_io,
+        as_attachment=True,
+        download_name=nombre_archivo,
+        mimetype=mime,
+    )
 
 
 @app.route('/aprobar-vacaciones-con-sustento', methods=['POST'])

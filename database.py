@@ -1476,6 +1476,73 @@ def eliminar_solicitud_vacaciones(company, person, solicitud_id):
                 pass
 
 
+def extraer_drive_file_id_sustento_vacaciones(comments):
+    """Extrae el file_id de Drive guardado en Comments (prefijo SUSTENTO_DRIVE:)."""
+    raw = str(comments or '').strip()
+    prefix = 'SUSTENTO_DRIVE:'
+    if raw.upper().startswith(prefix):
+        return raw[len(prefix):].strip()
+    return ''
+
+
+def obtener_sustento_drive_ids_por_solicitudes(company, solicitud_ids):
+    """
+    Mapa { solicitud_id: drive_file_id } para solicitudes aprobadas con sustento en Drive.
+    """
+    ids = []
+    for sid in solicitud_ids or []:
+        try:
+            ids.append(int(sid))
+        except (TypeError, ValueError):
+            continue
+    if not ids:
+        return {}
+
+    conn = None
+    try:
+        conn = DatabaseConfig.get_connection()
+        cursor = conn.cursor()
+        placeholders = ','.join('?' * len(ids))
+        cursor.execute(
+            f"""
+            SELECT Id, Comments
+            FROM PR_SolicitudVacaciones
+            WHERE Company = ?
+              AND status = 'A'
+              AND Id IN ({placeholders})
+            """,
+            [str(company or '').strip(), *ids],
+        )
+        out = {}
+        for row in cursor.fetchall():
+            sid = row[0]
+            fid = extraer_drive_file_id_sustento_vacaciones(row[1] if len(row) > 1 else '')
+            if fid:
+                out[int(sid)] = fid
+        cursor.close()
+        conn.close()
+        return out
+    except Exception as e:
+        print(f'Error en obtener_sustento_drive_ids_por_solicitudes: {e}')
+        return {}
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def obtener_drive_file_id_sustento_vacaciones(solicitud_id, company):
+    """file_id de Drive para una solicitud aprobada con sustento, o cadena vacía."""
+    try:
+        sid = int(solicitud_id)
+    except (TypeError, ValueError):
+        return ''
+    m = obtener_sustento_drive_ids_por_solicitudes(company, [sid])
+    return str(m.get(sid) or '').strip()
+
+
 def aprobar_solicitud_vacaciones_con_sustento(solicitud_id, company, approval_user, drive_file_id):
     """
     Aprueba solicitud pendiente y registra el file_id de Drive en Comments (SUSTENTO_DRIVE:...).

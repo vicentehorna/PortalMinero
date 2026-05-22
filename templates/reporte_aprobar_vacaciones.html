@@ -132,6 +132,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     const IDX_STICKY_2 = 1;
     const IDX_CENTRO = new Set([2, 3, 4, 5, 6]);
     const URL_APROBAR_SUSTENTO = {{ url_for('aprobar_vacaciones_con_sustento') | tojson }};
+    const URL_DESCARGAR_SUSTENTO = {{ url_for('descargar_sustento_vacaciones') | tojson }};
 
     let lastExportAprobarVac = null;
     let lastRowsMetaAprobarVac = [];
@@ -175,19 +176,35 @@ document.addEventListener('DOMContentLoaded', async function () {
         return opt ? opt.textContent.trim() : '';
     }
 
-    function celdaAccionSustento(meta) {
-        if (!meta || !meta.can_upload) {
-            return '<span class="text-muted">—</span>';
+    function celdaAccionesVacaciones(meta) {
+        if (!meta) return '<span class="text-muted">—</span>';
+        const iconStyle = 'color:#06b6d4;';
+        const parts = [];
+        if (meta.can_upload) {
+            const id = escapeHtml(meta.id);
+            const person = escapeHtml(meta.person);
+            const year = escapeHtml(meta.controlyear);
+            const nombre = escapeHtml(meta.name || '');
+            parts.push(
+                '<span role="button" tabindex="0" class="btn-adjuntar-sustento me-2" ' +
+                'data-solicitud-id="' + id + '" data-person-dni="' + person + '" ' +
+                'data-control-year="' + year + '" data-person-name="' + nombre + '" ' +
+                'title="Adjuntar sustento PDF y aprobar" aria-label="Adjuntar sustento y aprobar">' +
+                '<i class="bi bi-cloud-upload fs-5" style="cursor:pointer; ' + iconStyle + '"></i></span>'
+            );
         }
-        const id = escapeHtml(meta.id);
-        const person = escapeHtml(meta.person);
-        const year = escapeHtml(meta.controlyear);
-        const nombre = escapeHtml(meta.name || '');
-        return '<span role="button" tabindex="0" class="btn-adjuntar-sustento" ' +
-            'data-solicitud-id="' + id + '" data-person-dni="' + person + '" ' +
-            'data-control-year="' + year + '" data-person-name="' + nombre + '" ' +
-            'title="Adjuntar sustento PDF y aprobar" aria-label="Adjuntar sustento y aprobar">' +
-            '<i class="bi bi-cloud-upload fs-5" style="cursor:pointer; color:#06b6d4;"></i></span>';
+        if (meta.can_download) {
+            const href = URL_DESCARGAR_SUSTENTO + '?solicitud_id=' + encodeURIComponent(String(meta.id || ''));
+            parts.push(
+                '<a href="' + escapeHtml(href) + '" class="btn-descargar-sustento" ' +
+                'title="Descargar sustento PDF" aria-label="Descargar sustento PDF" ' +
+                'target="_blank" rel="noopener noreferrer">' +
+                '<i class="bi bi-cloud-download fs-5" style="' + iconStyle + '"></i></a>'
+            );
+        }
+        if (!parts.length) return '<span class="text-muted">—</span>';
+        return '<span class="d-inline-flex align-items-center justify-content-center gap-1">' +
+            parts.join('') + '</span>';
     }
 
     function abrirModalSustento(meta) {
@@ -240,7 +257,7 @@ document.addEventListener('DOMContentLoaded', async function () {
                 const align = IDX_CENTRO.has(index) ? 'text-center' : '';
                 htmlBody += `<td class="${[sticky, align].filter(Boolean).join(' ')}">${escapeHtml(fmtCelda(valor))}</td>`;
             });
-            htmlBody += '<td class="text-center">' + celdaAccionSustento(meta) + '</td>';
+            htmlBody += '<td class="text-center">' + celdaAccionesVacaciones(meta) + '</td>';
             htmlBody += '</tr>';
         });
 
