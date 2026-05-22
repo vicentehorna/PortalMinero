@@ -1360,6 +1360,80 @@ def _listar_archivos_pdf_drive(folder_id):
         raise _runtime_error_google_api(e) from e
 
 
+def _normalizar_nombre_boleta_fin_de_mes(nombre_archivo):
+    """
+    Convierte periodo_FIN_DE_MES_dni_nombre.pdf → BOL_periodo_dni_nombre.pdf.
+    Retorna None si el nombre no requiere cambio.
+    """
+    nombre = str(nombre_archivo or '').strip()
+    if not nombre or 'FIN_DE_MES' not in nombre.upper():
+        return None
+    lower = nombre.lower()
+    ext = '.pdf' if lower.endswith('.pdf') else ''
+    base = nombre[:-4] if ext else nombre
+    if 'FIN_DE_MES' not in base.upper():
+        return None
+    nuevo_base = re.sub(r'FIN_DE_MES', 'BOL', base, flags=re.IGNORECASE)
+    m = re.match(r'^(\d+)_BOL_(.+)$', nuevo_base, re.IGNORECASE)
+    if m:
+        nuevo_base = f'BOL_{m.group(1)}_{m.group(2)}'
+    nuevo = f'{nuevo_base}{ext}'
+    return nuevo if nuevo != nombre else None
+
+
+def _renombrar_boletas_fin_de_mes_en_drive(archivos):
+    """
+    Renombra en Drive los PDF con FIN_DE_MES al formato BOL_Periodo_DNI_Nombre
+    y actualiza el campo name en la lista antes de sincronizar metadata.
+    """
+    stats = {'detectados': 0, 'renombrados': 0, 'fallidos': 0}
+    pendientes = []
+    for item in archivos or []:
+        nombre = str((item or {}).get('name') or '').strip()
+        file_id = str((item or {}).get('id') or '').strip()
+        nuevo = _normalizar_nombre_boleta_fin_de_mes(nombre)
+        if nuevo and file_id:
+            stats['detectados'] += 1
+            pendientes.append((item, file_id, nombre, nuevo))
+
+    if not pendientes:
+        return stats
+
+    service = None
+    HttpError = None
+    try:
+        from googleapiclient.errors import HttpError as _HttpError
+
+        HttpError = _HttpError
+        service = _build_drive_service()
+    except Exception as e:
+        logging.warning(
+            'Rename FIN_DE_MES: no se pudo usar API Drive (%s); se sincroniza con nombre normalizado.',
+            e,
+        )
+
+    for item, file_id, nombre, nuevo in pendientes:
+        if service:
+            try:
+                service.files().update(
+                    fileId=file_id,
+                    body={'name': nuevo},
+                    supportsAllDrives=True,
+                ).execute()
+                item['name'] = nuevo
+                stats['renombrados'] += 1
+                logging.info('Boleta Drive renombrada: %r -> %r', nombre, nuevo)
+                continue
+            except Exception as e:
+                stats['fallidos'] += 1
+                reason = _drive_http_error_reason(e) if HttpError and isinstance(e, HttpError) else str(e)
+                logging.warning('No se pudo renombrar en Drive %r: %s', nombre, reason)
+        item['name'] = nuevo
+        if not service:
+            stats['renombrados'] += 1
+    return stats
+
+
 def _credentials_drive_service_account(scopes=None, subject=None):
     """
     Credenciales OAuth de la service account para la API de Drive.
@@ -1710,11 +1784,15 @@ def procesar_carga_servidor():
         return redirect(url_for('carga_documentos'))
     try:
         archivos_drive = _listar_archivos_pdf_drive(folder_id)
+        rename_stats = _renombrar_boletas_fin_de_mes_en_drive(archivos_drive)
         stats = sincronizar_metadata_drive(archivos_drive)
         ok_sp, msg_sp = ejecutar_sp_updatecompany_documentos_boletas()
 
         flash(
             f'Sincronización finalizada. PDF en Drive: {len(archivos_drive)}. '
+            f'Renombrados FIN_DE_MES→BOL: {rename_stats.get("renombrados", 0)} '
+            f'(detectados: {rename_stats.get("detectados", 0)}, '
+            f'fallidos en Drive: {rename_stats.get("fallidos", 0)}). '
             f'Procesados: {stats.get("procesados", 0)}. '
             f'Sincronizados (insert/update): {stats.get("ok", 0)}. '
             f'Omitidos por formato: {stats.get("omitidos_formato", 0)}. '
@@ -1759,8 +1837,15 @@ def api_carga_documentos_sincronizar():
         cursor = None
         try:
             archivos = _listar_archivos_pdf_drive(folder_id)
+            rename_stats = _renombrar_boletas_fin_de_mes_en_drive(archivos)
             total = len(archivos)
-            yield json.dumps({'type': 'start', 'total': total}, ensure_ascii=False) + '\n'
+            yield (
+                json.dumps(
+                    {'type': 'start', 'total': total, 'rename': rename_stats},
+                    ensure_ascii=False,
+                )
+                + '\n'
+            )
 
             cum = {'procesados': 0, 'omitidos_formato': 0, 'sin_id': 0, 'ok': 0}
             conn = get_db_connection()
@@ -1798,6 +1883,7 @@ def api_carga_documentos_sincronizar():
                         'type': 'done',
                         'total': total,
                         'stats': dict(cum),
+                        'rename': rename_stats,
                         'sp_ok': ok_sp,
                         'sp_msg': msg_sp,
                     },

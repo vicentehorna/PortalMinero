@@ -112,10 +112,15 @@
     function applyStreamEvent(ev) {
         if (ev.type === 'start') {
             fileTotal = ev.total || 0;
+            const ren = ev.rename || {};
             if (fileTotal === 0) {
                 setProgress(0, 0);
             } else {
                 setProgress(0, fileTotal);
+                if (ren.renombrados) {
+                    label.textContent = 'Renombrados ' + ren.renombrados +
+                        ' archivo(s) FIN_DE_MES→BOL. Sincronizando…';
+                }
             }
         } else if (ev.type === 'progress') {
             setProgress(ev.current || 0, ev.total || fileTotal || 1);
@@ -128,11 +133,16 @@
             }
             bar.classList.remove('progress-bar-animated', 'progress-bar-striped');
             const s = ev.stats || {};
-            const msg =
+            const ren = ev.rename || {};
+            let msg =
                 'Sincronización finalizada. Procesados: ' + (s.procesados || 0) +
                 '. Insert/actualización: ' + (s.ok || 0) +
                 '. Omitidos (formato): ' + (s.omitidos_formato || 0) +
                 '. Sin ID: ' + (s.sin_id || 0) + '.';
+            if (ren.detectados) {
+                msg += ' Renombrados FIN_DE_MES→BOL: ' + (ren.renombrados || 0) +
+                    ' (detectados: ' + ren.detectados + ', fallidos en Drive: ' + (ren.fallidos || 0) + ').';
+            }
             if (ev.sp_ok) {
                 setAlert('success', msg + '<br><small>' + (ev.sp_msg || '') + '</small>');
             } else {
