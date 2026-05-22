@@ -20,3 +20,5 @@ services:
         value: "1"
       - key: WEB_CONCURRENCY
         value: "1"
+      - key: GUNICORN_TIMEOUT
+        value: "900"

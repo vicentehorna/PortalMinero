@@ -31,7 +31,18 @@
         <p class="small text-muted mb-4">
             Formato esperado del nombre: <code>Tipo_Periodo_DNI_Nombre empleado.pdf</code>
             (separado por guiones bajos; el nombre puede incluir espacios si no hay más guiones bajos).
+            Los archivos con <code>FIN_DE_MES</code> en el nombre se renombran automáticamente a
+            <code>BOL_Periodo_DNI_Nombre.pdf</code> antes de sincronizar.
+            Se incluyen PDF en <strong>subcarpetas</strong> (por ejemplo <code>BOLETA/2026</code>).
+            La carpeta debe estar compartida con la <strong>service account</strong> de Render como Editor.
         </p>
+        <details class="small border rounded px-3 py-2 mb-4 bg-light">
+            <summary class="fw-semibold text-secondary cursor-pointer">Si la sincronización se corta a mitad (miles de PDF)</summary>
+            <p class="mb-2 mt-2 text-muted small">
+                En el servidor el proceso puede tardar varios minutos. Si se interrumpe, los documentos ya guardados permanecen:
+                pulse de nuevo <strong>Sincronizar</strong> para continuar. Referencia de soporte: <code>SYNC_TIMEOUT</code>.
+            </p>
+        </details>
         <details class="small border rounded px-3 py-2 mb-4 bg-light">
             <summary class="fw-semibold text-secondary cursor-pointer">Si falla la conexión con Google (timeout o error de red)</summary>
             <ul class="mb-0 mt-2 ps-3 text-muted">
@@ -83,8 +94,19 @@
     const alertBox = document.getElementById('syncResultAlert');
     if (!btn || !btn.dataset.syncUrl) return;
 
+    function escapeHtml(s) {
+        return String(s || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/"/g, '&quot;');
+    }
+
     function setAlert(kind, html) {
-        alertBox.className = 'alert mb-3 ' + (kind === 'success' ? 'alert-success' : kind === 'danger' ? 'alert-danger' : 'alert-info');
+        const cls = kind === 'success' ? 'alert-success'
+            : kind === 'danger' ? 'alert-danger'
+            : kind === 'warning' ? 'alert-warning'
+            : 'alert-info';
+        alertBox.className = 'alert mb-3 ' + cls;
         alertBox.innerHTML = html;
         alertBox.classList.remove('d-none');
     }
@@ -143,8 +165,12 @@
                 msg += ' Renombrados FIN_DE_MES→BOL: ' + (ren.renombrados || 0) +
                     ' (detectados: ' + ren.detectados + ', fallidos en Drive: ' + (ren.fallidos || 0) + ').';
             }
+            const alertType = (s.ok || 0) > 0 ? 'success' : 'warning';
+            if (ev.hint) {
+                msg += '<br><small class="text-muted">' + escapeHtml(ev.hint) + '</small>';
+            }
             if (ev.sp_ok) {
-                setAlert('success', msg + '<br><small>' + (ev.sp_msg || '') + '</small>');
+                setAlert(alertType, msg + '<br><small>' + (ev.sp_msg || '') + '</small>');
             } else {
                 setAlert('danger', msg + '<br><small class="text-danger">' + (ev.sp_msg || '') + '</small>');
             }

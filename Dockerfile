@@ -37,4 +37,5 @@ ENV PORT=10000
 EXPOSE 10000
 
 # 5. Comando para ejecutar la app (shell para expandir $PORT)
-CMD ["/bin/sh", "-c", "exec gunicorn --bind 0.0.0.0:${PORT} --workers ${WEB_CONCURRENCY:-1} --timeout 120 app:app"]
+# Sincronizar miles de PDF puede superar 120 s; GUNICORN_TIMEOUT (segundos, mín. 120).
+CMD ["/bin/sh", "-c", "exec gunicorn --bind 0.0.0.0:${PORT} --workers ${WEB_CONCURRENCY:-1} --timeout ${GUNICORN_TIMEOUT:-900} app:app"]

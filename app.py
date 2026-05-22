@@ -1274,6 +1274,37 @@ def _codigo_error_drive_para_soporte(exc):
     return 'DRIVE_TIMEOUT' if _drive_es_timeout_o_red(exc) else 'DRIVE_UNAVAILABLE'
 
 
+def _es_timeout_worker_sync(exc, depth=0):
+    """
+    True si el proceso fue abortado por tiempo (p. ej. Gunicorn WORKER TIMEOUT).
+    Suele verse como SystemError de pyodbc al cortar cursor.execute a mitad de lote.
+    """
+    if depth > 8 or exc is None:
+        return False
+    if isinstance(exc, SystemError):
+        return True
+    msg = str(exc).lower()
+    if 'worker timeout' in msg or 'handle_abort' in msg:
+        return True
+    return _es_timeout_worker_sync(getattr(exc, '__cause__', None), depth + 1)
+
+
+def _codigo_error_sync_carga(exc):
+    if _es_timeout_worker_sync(exc):
+        return 'SYNC_TIMEOUT'
+    return _codigo_error_drive_para_soporte(exc)
+
+
+def _mensaje_error_sync_carga(exc):
+    if _es_timeout_worker_sync(exc):
+        return (
+            'La sincronización tardó más de lo permitido en el servidor y se interrumpió. '
+            'Los documentos ya procesados quedaron guardados: pulse de nuevo «Sincronizar desde Google Drive» '
+            'para continuar con el resto. Si el fallo se repite en el mismo punto, contacte a soporte o al área de sistemas.'
+        )
+    return _mensaje_error_drive_para_usuario(exc)
+
+
 def _mensaje_error_drive_para_usuario(exc):
     """
     Texto para quien usa la web: no menciona Python, firewalls ni variables de entorno.
@@ -1326,38 +1357,115 @@ def _descarga_personal_es_fetch():
     return request.headers.get('X-Fetch-Descarga') == '1'
 
 
-def _listar_archivos_pdf_drive(folder_id):
-    """
-    Lista PDF de una carpeta de Google Drive y retorna [{'name', 'id'}, ...].
-    Errores de credenciales, JSON o API se encapsulan en RuntimeError con mensaje claro.
-    """
+def _meta_carpeta_drive(folder_id):
+    """Metadatos de carpeta Drive (acceso service account). None si no se puede leer."""
     try:
         service = _build_drive_service()
-        q = (
-            f"'{folder_id}' in parents and "
-            "mimeType='application/pdf' and trashed=false"
-        )
+        return service.files().get(
+            fileId=str(folder_id or '').strip(),
+            fields='id,name,mimeType,driveId',
+            supportsAllDrives=True,
+        ).execute()
+    except Exception as e:
+        logging.warning('Drive: no se pudo leer carpeta %s: %s', folder_id, e)
+        return None
+
+
+def _listar_archivos_pdf_drive(folder_id, incluir_subcarpetas=True):
+    """
+    Lista PDF en una carpeta de Google Drive (y subcarpetas si incluir_subcarpetas).
+    Retorna [{'name', 'id'}, ...]. Usa supportsAllDrives para carpetas compartidas / unidades compartidas.
+    """
+    fid_raiz = str(folder_id or '').strip()
+    if not fid_raiz:
+        return []
+    mime_pdf = 'application/pdf'
+    mime_folder = 'application/vnd.google-apps.folder'
+    try:
+        service = _build_drive_service()
         archivos = []
-        page_token = None
-        while True:
-            resp = service.files().list(
-                q=q,
-                spaces='drive',
-                fields='nextPageToken, files(id, name)',
-                pageSize=1000,
-                orderBy='name',
-                pageToken=page_token,
-            ).execute()
-            archivos.extend(resp.get('files', []))
-            page_token = resp.get('nextPageToken')
-            if not page_token:
-                break
+        pendientes = [fid_raiz]
+        visitadas = set()
+
+        while pendientes:
+            fid = pendientes.pop(0)
+            if fid in visitadas:
+                continue
+            visitadas.add(fid)
+            page_token = None
+            while True:
+                q = f"'{fid}' in parents and trashed=false"
+                resp = service.files().list(
+                    q=q,
+                    corpora='allDrives',
+                    supportsAllDrives=True,
+                    includeItemsFromAllDrives=True,
+                    fields='nextPageToken, files(id, name, mimeType)',
+                    pageSize=1000,
+                    pageToken=page_token,
+                ).execute()
+                for f in resp.get('files') or []:
+                    mime = str(f.get('mimeType') or '')
+                    if mime == mime_pdf:
+                        archivos.append({
+                            'id': f.get('id'),
+                            'name': f.get('name'),
+                        })
+                    elif incluir_subcarpetas and mime == mime_folder:
+                        sub_id = str(f.get('id') or '').strip()
+                        if sub_id:
+                            pendientes.append(sub_id)
+                page_token = resp.get('nextPageToken')
+                if not page_token:
+                    break
+
+        logging.info(
+            'Drive list: folder_id=%s subcarpetas=%s carpetas_visitadas=%s pdfs=%s',
+            fid_raiz,
+            incluir_subcarpetas,
+            len(visitadas),
+            len(archivos),
+        )
+        print(
+            f'[Drive sync] folder_id={fid_raiz!r} pdfs_encontrados={len(archivos)} '
+            f'subcarpetas={incluir_subcarpetas}',
+            flush=True,
+        )
         return archivos
     except RuntimeError:
         raise
     except Exception as e:
-        logging.exception('_listar_archivos_pdf_drive')
+        logging.exception('_listar_archivos_pdf_drive folder_id=%s', fid_raiz)
         raise _runtime_error_google_api(e) from e
+
+
+def _mensaje_sync_sin_pdfs_drive(folder_id, stats, rename_stats):
+    """Texto de ayuda cuando la sincronización no encontró o procesó PDF."""
+    meta = _meta_carpeta_drive(folder_id)
+    nombre_carpeta = (meta or {}).get('name') if meta else None
+    partes = [
+        f'No se sincronizó ningún PDF. Carpeta configurada (ID): {folder_id}.',
+    ]
+    if nombre_carpeta:
+        partes.append(f'Nombre en Drive: {nombre_carpeta}.')
+    if meta and meta.get('driveId'):
+        partes.append('(Unidad compartida detectada.)')
+    partes.append(
+        'Revise: (1) compartir la carpeta BOLETA (y subcarpetas como 2026) con la service account '
+        'portal-minero-drive-access@… como Editor; (2) usar el ID de la carpeta donde están los PDF '
+        '(o una carpeta padre: ahora también se buscan PDF en subcarpetas); '
+        '(3) credenciales GOOGLE_DRIVE_CREDENTIALS_JSON en Render.'
+    )
+    if stats.get('omitidos_formato'):
+        partes.append(
+            f"Archivos con formato no válido: {stats.get('omitidos_formato')}."
+        )
+    if rename_stats.get('detectados'):
+        partes.append(
+            f"FIN_DE_MES detectados: {rename_stats.get('detectados')}, "
+            f"renombrados: {rename_stats.get('renombrados')}."
+        )
+    return ' '.join(partes)
 
 
 def _normalizar_nombre_boleta_fin_de_mes(nombre_archivo):
@@ -1788,7 +1896,7 @@ def procesar_carga_servidor():
         stats = sincronizar_metadata_drive(archivos_drive)
         ok_sp, msg_sp = ejecutar_sp_updatecompany_documentos_boletas()
 
-        flash(
+        resumen = (
             f'Sincronización finalizada. PDF en Drive: {len(archivos_drive)}. '
             f'Renombrados FIN_DE_MES→BOL: {rename_stats.get("renombrados", 0)} '
             f'(detectados: {rename_stats.get("detectados", 0)}, '
@@ -1796,9 +1904,14 @@ def procesar_carga_servidor():
             f'Procesados: {stats.get("procesados", 0)}. '
             f'Sincronizados (insert/update): {stats.get("ok", 0)}. '
             f'Omitidos por formato: {stats.get("omitidos_formato", 0)}. '
-            f'Sin ID de Drive: {stats.get("sin_id", 0)}.',
-            'success',
+            f'Sin ID de Drive: {stats.get("sin_id", 0)}.'
         )
+        flash(resumen, 'success' if stats.get('ok') else 'warning')
+        if not stats.get('ok'):
+            flash(
+                _mensaje_sync_sin_pdfs_drive(folder_id, stats, rename_stats),
+                'warning',
+            )
         if ok_sp:
             flash(msg_sp, 'success')
         else:
@@ -1810,7 +1923,7 @@ def procesar_carga_servidor():
     return redirect(url_for('carga_documentos'))
 
 
-CARGA_DOCUMENTOS_BATCH_SYNC = 25
+CARGA_DOCUMENTOS_BATCH_SYNC = 50
 
 
 @app.route('/api/carga-documentos/sincronizar', methods=['POST'])
@@ -1877,20 +1990,20 @@ def api_carga_documentos_sincronizar():
                 conn = None
 
             ok_sp, msg_sp = ejecutar_sp_updatecompany_documentos_boletas()
-            yield (
-                json.dumps(
-                    {
-                        'type': 'done',
-                        'total': total,
-                        'stats': dict(cum),
-                        'rename': rename_stats,
-                        'sp_ok': ok_sp,
-                        'sp_msg': msg_sp,
-                    },
-                    ensure_ascii=False,
+            done_payload = {
+                'type': 'done',
+                'total': total,
+                'stats': dict(cum),
+                'rename': rename_stats,
+                'folder_id': folder_id,
+                'sp_ok': ok_sp,
+                'sp_msg': msg_sp,
+            }
+            if not cum.get('ok'):
+                done_payload['hint'] = _mensaje_sync_sin_pdfs_drive(
+                    folder_id, cum, rename_stats
                 )
-                + '\n'
-            )
+            yield json.dumps(done_payload, ensure_ascii=False) + '\n'
         except Exception as e:
             logging.exception('api_carga_documentos_sincronizar')
             if conn:
@@ -1902,8 +2015,8 @@ def api_carga_documentos_sincronizar():
                 json.dumps(
                     {
                         'type': 'error',
-                        'message': _mensaje_error_drive_para_usuario(e),
-                        'code': _codigo_error_drive_para_soporte(e),
+                        'message': _mensaje_error_sync_carga(e),
+                        'code': _codigo_error_sync_carga(e),
                     },
                     ensure_ascii=False,
                 )
