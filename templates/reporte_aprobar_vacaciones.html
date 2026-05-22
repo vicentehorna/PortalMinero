@@ -213,7 +213,13 @@ document.addEventListener('DOMContentLoaded', async function () {
         document.getElementById('sustentoSolicitudId').value = String(meta.id || '');
         document.getElementById('sustentoPersonDni').value = String(meta.person || '');
         document.getElementById('sustentoControlYear').value = String(meta.controlyear || '');
-        document.getElementById('sustento_pdf').value = '';
+        const fileInput = document.getElementById('sustento_pdf');
+        if (fileInput) fileInput.value = '';
+        const fileNameEl = document.getElementById('sustentoFileNameDisplay');
+        if (fileNameEl) {
+            fileNameEl.textContent = 'Ningún documento seleccionado';
+            fileNameEl.classList.add('is-empty');
+        }
         const errEl = document.getElementById('sustentoUploadError');
         errEl.classList.add('d-none');
         errEl.textContent = '';
@@ -566,7 +572,7 @@ document.addEventListener('DOMContentLoaded', async function () {
                     return;
                 }
                 if (modalSustentoInst) modalSustentoInst.hide();
-                alert(data.message || 'Solicitud aprobada correctamente.');
+                alert(data.message || 'Solicitud aprobada y sustento cargado.');
                 await ejecutarConsulta();
             } catch (err) {
                 console.error(err);

@@ -3179,7 +3179,7 @@ def aprobar_vacaciones_con_sustento():
             }), 409
         return jsonify({
             'ok': True,
-            'message': 'Solicitud aprobada y sustento cargado en Google Drive.',
+            'message': 'Solicitud aprobada y sustento cargado.',
             'drive_file_id': file_id,
             'file_name': nombre_drive,
         })
