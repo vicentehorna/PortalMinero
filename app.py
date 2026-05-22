@@ -1532,7 +1532,6 @@ def _subir_pdf_sustento_drive(folder_id, nombre_archivo, archivo_stream):
             fileId=parent_id,
             fields='id,name,driveId,mimeType,capabilities',
             supportsAllDrives=True,
-            includeItemsFromAllDrives=True,
         ).execute()
         logging.info(
             'Drive sustento: carpeta OK id=%s driveId=%s name=%r canAddChildren=%s',
