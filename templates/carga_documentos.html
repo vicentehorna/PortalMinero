@@ -160,6 +160,7 @@
                 'Sincronización finalizada. Procesados: ' + (s.procesados || 0) +
                 '. Insert/actualización: ' + (s.ok || 0) +
                 '. Omitidos (formato): ' + (s.omitidos_formato || 0) +
+                '. Omitidos (nombre muy largo): ' + (s.omitidos_largo || 0) +
                 '. Sin ID: ' + (s.sin_id || 0) + '.';
             if (ren.detectados) {
                 msg += ' Renombrados FIN_DE_MES→BOL: ' + (ren.renombrados || 0) +

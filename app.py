@@ -1289,9 +1289,22 @@ def _es_timeout_worker_sync(exc, depth=0):
     return _es_timeout_worker_sync(getattr(exc, '__cause__', None), depth + 1)
 
 
+def _es_datos_truncados_sql_sync(exc, depth=0):
+    """8152 / 22001: algún campo supera el tamaño de columna en DocumentosBoletas."""
+    from database import _es_error_truncado_sql
+
+    if depth > 8 or exc is None:
+        return False
+    if _es_error_truncado_sql(exc):
+        return True
+    return _es_datos_truncados_sql_sync(getattr(exc, '__cause__', None), depth + 1)
+
+
 def _codigo_error_sync_carga(exc):
     if _es_timeout_worker_sync(exc):
         return 'SYNC_TIMEOUT'
+    if _es_datos_truncados_sql_sync(exc):
+        return 'SYNC_DATA_TRUNCATED'
     return _codigo_error_drive_para_soporte(exc)
 
 
@@ -1301,6 +1314,12 @@ def _mensaje_error_sync_carga(exc):
             'La sincronización tardó más de lo permitido en el servidor y se interrumpió. '
             'Los documentos ya procesados quedaron guardados: pulse de nuevo «Sincronizar desde Google Drive» '
             'para continuar con el resto. Si el fallo se repite en el mismo punto, contacte a soporte o al área de sistemas.'
+        )
+    if _es_datos_truncados_sql_sync(exc):
+        return (
+            'Un archivo tiene un nombre demasiado largo para la base de datos y detuvo la sincronización. '
+            'Los documentos ya guardados permanecen. Acorte en Drive el nombre del PDF '
+            '(sobre todo la parte del empleado tras el DNI) y vuelva a sincronizar.'
         )
     return _mensaje_error_drive_para_usuario(exc)
 
@@ -1459,6 +1478,11 @@ def _mensaje_sync_sin_pdfs_drive(folder_id, stats, rename_stats):
     if stats.get('omitidos_formato'):
         partes.append(
             f"Archivos con formato no válido: {stats.get('omitidos_formato')}."
+        )
+    if stats.get('omitidos_largo'):
+        partes.append(
+            f"Archivos con nombre demasiado largo para la base de datos: {stats.get('omitidos_largo')} "
+            '(acorte el nombre del empleado en el PDF).'
         )
     if rename_stats.get('detectados'):
         partes.append(
@@ -1904,6 +1928,7 @@ def procesar_carga_servidor():
             f'Procesados: {stats.get("procesados", 0)}. '
             f'Sincronizados (insert/update): {stats.get("ok", 0)}. '
             f'Omitidos por formato: {stats.get("omitidos_formato", 0)}. '
+            f'Omitidos (nombre muy largo): {stats.get("omitidos_largo", 0)}. '
             f'Sin ID de Drive: {stats.get("sin_id", 0)}.'
         )
         flash(resumen, 'success' if stats.get('ok') else 'warning')
@@ -1960,7 +1985,13 @@ def api_carga_documentos_sincronizar():
                 + '\n'
             )
 
-            cum = {'procesados': 0, 'omitidos_formato': 0, 'sin_id': 0, 'ok': 0}
+            cum = {
+                'procesados': 0,
+                'omitidos_formato': 0,
+                'omitidos_largo': 0,
+                'sin_id': 0,
+                'ok': 0,
+            }
             conn = get_db_connection()
             cursor = conn.cursor()
 

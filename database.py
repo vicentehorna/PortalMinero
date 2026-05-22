@@ -1,8 +1,11 @@
+import logging
 import os
 import pyodbc
 import platform
 from flask_login import UserMixin
 from dotenv import load_dotenv
+
+_logger_db = logging.getLogger(__name__)
 
 # Cargar variables de entorno desde .env
 load_dotenv()
@@ -180,7 +183,25 @@ WHEN NOT MATCHED THEN
 
 
 def _stats_metadata_drive_vacio():
-    return {"procesados": 0, "omitidos_formato": 0, "sin_id": 0, "ok": 0}
+    return {
+        "procesados": 0,
+        "omitidos_formato": 0,
+        "omitidos_largo": 0,
+        "sin_id": 0,
+        "ok": 0,
+    }
+
+
+def _es_error_truncado_sql(exc):
+    """SQL Server 8152 / ODBC 22001: dato más largo que la columna."""
+    if exc is None:
+        return False
+    if isinstance(exc, pyodbc.DataError):
+        msg = str(exc).lower()
+        if "22001" in str(exc) or "8152" in msg or "truncat" in msg:
+            return True
+    msg = str(exc).lower()
+    return "8152" in msg or "truncat" in msg or "22001" in msg
 
 
 def _acumular_stats_metadata_drive(total, delta):
@@ -224,10 +245,26 @@ def procesar_un_item_metadata_drive(cursor, item):
         delta["omitidos_formato"] = 1
         return delta
 
-    cursor.execute(
-        _MERGE_SQL_DOCUMENTOS_BOLETAS,
-        (dni, periodo, tipo, nombre_trabajador, nombre_archivo, drive_id),
-    )
+    try:
+        cursor.execute(
+            _MERGE_SQL_DOCUMENTOS_BOLETAS,
+            (dni, periodo, tipo, nombre_trabajador, nombre_archivo, drive_id),
+        )
+    except pyodbc.DataError as e:
+        if _es_error_truncado_sql(e):
+            delta["omitidos_largo"] = 1
+            _logger_db.warning(
+                "Sync Drive: nombre demasiado largo para BD (omitido): %r "
+                "(dni=%r periodo=%r tipo=%r len_nombre=%s len_archivo=%s)",
+                nombre_archivo,
+                dni,
+                periodo,
+                tipo,
+                len(nombre_trabajador),
+                len(nombre_archivo),
+            )
+            return delta
+        raise
     delta["ok"] = 1
     return delta
 
