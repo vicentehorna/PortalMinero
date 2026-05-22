@@ -329,7 +329,7 @@
             <div class="sidebar-nav-scroll">
                 <ul class="list-unstyled components mb-0">
                     {% if session.get('simple_profile') %}
-                    <li class="{{ 'active' if request.endpoint == 'dashboard' or request.endpoint == 'mis_documentos_simple_page' else '' }}">
+                    <li class="{{ 'active' if request.endpoint in ('dashboard', 'mis_documentos_simple_page', 'solicitud_vacaciones_page') else '' }}">
                         <a href="{{ url_for('dashboard') }}" class="sidebar-link" title="Dashboard">
                             <i class="bi bi-speedometer2 sidebar-icon" aria-hidden="true"></i>
                             <span class="sidebar-link-text">Dashboard</span>
@@ -355,12 +355,14 @@
                         </a>
                     </li>
 
+                    {% if session.get('simple_profile') %}
                     <li class="{{ 'active' if request.endpoint == 'solicitud_vacaciones_page' else '' }}">
                         <a href="{{ url_for('solicitud_vacaciones_page') }}" class="sidebar-link" title="Solicitud de vacaciones">
                             <i class="bi bi-send-check sidebar-icon" aria-hidden="true"></i>
                             <span class="sidebar-link-text">Solicitud de vacaciones</span>
                         </a>
                     </li>
+                    {% endif %}
 
                     <li class="py-0">
                         <p class="sidebar-section-title text-uppercase fw-bold opacity-50">Reportes</p>

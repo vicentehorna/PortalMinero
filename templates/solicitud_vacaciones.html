@@ -15,6 +15,24 @@
         letter-spacing: 0.02em;
         color: #64748b;
         margin-bottom: 0.25rem;
+        line-height: 1.2;
+    }
+
+    @media (max-width: 767.98px) {
+        .kpi-row .kpi-card .card-body {
+            padding: 0.5rem 0.35rem;
+            text-align: center;
+        }
+
+        .kpi-row .kpi-label {
+            font-size: 0.62rem;
+            letter-spacing: 0.01em;
+            margin-bottom: 0.15rem;
+        }
+
+        .kpi-row .kpi-value {
+            font-size: 1.35rem !important;
+        }
     }
 
     .readonly-soft {
@@ -121,28 +139,34 @@
 {% block content %}
 <div class="row g-3 g-lg-4">
     <div class="col-12 col-md-5 col-lg-4">
-        <div class="row g-2 mb-3">
-            <div class="col-12 col-md-4">
+        <div class="row g-2 mb-3 kpi-row row-cols-3">
+            <div class="col">
                 <div class="card kpi-card h-100">
                     <div class="card-body py-3">
-                        <p class="kpi-label">Días Totales <span class="text-muted fw-normal">(ejercicio)</span></p>
-                        <div class="fs-3 fw-bold text-primary" id="kpiTotal">{{ kpi_total }}</div>
+                        <p class="kpi-label mb-0">
+                            <span class="d-none d-md-inline">Días Totales <span class="text-muted fw-normal">(ejercicio)</span></span>
+                            <span class="d-md-none">Totales</span>
+                        </p>
+                        <div class="fs-3 fw-bold text-primary kpi-value" id="kpiTotal">{{ kpi_total }}</div>
                     </div>
                 </div>
             </div>
-            <div class="col-12 col-md-4">
+            <div class="col">
                 <div class="card kpi-card h-100">
                     <div class="card-body py-3">
-                        <p class="kpi-label">Consumidos / Solicitados</p>
-                        <div class="fs-3 fw-bold text-warning" id="kpiConsumidos">{{ kpi_consumidos }}</div>
+                        <p class="kpi-label mb-0">
+                            <span class="d-none d-md-inline">Consumidos / Solicitados</span>
+                            <span class="d-md-none">Consumidos</span>
+                        </p>
+                        <div class="fs-3 fw-bold text-warning kpi-value" id="kpiConsumidos">{{ kpi_consumidos }}</div>
                     </div>
                 </div>
             </div>
-            <div class="col-12 col-md-4">
+            <div class="col">
                 <div class="card kpi-card h-100">
                     <div class="card-body py-3">
-                        <p class="kpi-label">Disponibles</p>
-                        <div class="fs-3 fw-bold text-success" id="kpiDisponibles">{{ kpi_disponibles }}</div>
+                        <p class="kpi-label mb-0">Disponibles</p>
+                        <div class="fs-3 fw-bold text-success kpi-value" id="kpiDisponibles">{{ kpi_disponibles }}</div>
                     </div>
                 </div>
             </div>

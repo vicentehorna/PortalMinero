@@ -84,7 +84,7 @@
     <h2 class="mb-2 fw-bold">Bienvenido{% if nombre_bienvenida %}, {{ nombre_bienvenida }}{% endif %}</h2>
     <p class="mb-0 opacity-75">
         {% if mostrar_documentos_simple %}
-        Accede rápidamente a tus documentos desde las opciones siguientes.
+        Accede a tus documentos y solicitudes de vacaciones desde las opciones siguientes.
         {% else %}
         Portal Minería. Las acciones del menú lateral se irán habilitando conforme avance el proyecto.
         {% endif %}
@@ -112,6 +112,27 @@
             </a>
         </div>
         {% endfor %}
+    </div>
+</section>
+{% endif %}
+
+{% if mostrar_documentos_simple %}
+<section id="vacaciones" class="mb-4" aria-labelledby="titulo-vacaciones">
+    <h2 id="titulo-vacaciones" class="dashboard-section-title">
+        <i class="bi bi-calendar2-week" aria-hidden="true"></i> Vacaciones
+    </h2>
+    <div class="row g-3">
+        <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+            <a class="doc-tipo-card"
+               href="{{ url_for('solicitud_vacaciones_page') }}"
+               title="Solicitud de vacaciones">
+                <span class="doc-tipo-card-icon" aria-hidden="true">
+                    <i class="bi bi-send-check"></i>
+                </span>
+                <h3>Solicitud de vacaciones</h3>
+                <p>Registre fechas, consulte su saldo por ejercicio y el historial de solicitudes.</p>
+            </a>
+        </div>
     </div>
 </section>
 {% endif %}

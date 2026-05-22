@@ -1887,6 +1887,9 @@ def reporte_saldo_vacaciones_page():
 @login_required
 def solicitud_vacaciones_page():
     ensure_user_session()
+    if not session.get('simple_profile'):
+        flash('La solicitud de vacaciones está disponible solo para el perfil de trabajador.', 'warning')
+        return redirect(url_for('configuracion_usuario'))
     company = str(getattr(current_user, 'company', None) or session.get('company') or '').strip()
     person = str(getattr(current_user, 'person', None) or session.get('person') or '').strip()
     current_year = datetime.now().year
@@ -1978,6 +1981,8 @@ def solicitud_vacaciones_page():
 def api_solicitud_vacaciones_ejercicio():
     """Resumen KPI e historial del ejercicio seleccionado (saldo independiente por ControlYear)."""
     ensure_user_session()
+    if not session.get('simple_profile'):
+        return jsonify({'error': 'No autorizado.'}), 403
     company = str(getattr(current_user, 'company', None) or session.get('company') or '').strip()
     person = str(getattr(current_user, 'person', None) or session.get('person') or '').strip()
     control_year = str(request.args.get('controlyear') or '').strip()
@@ -3062,18 +3067,25 @@ def reporte_aprobar_vacaciones_post():
 def descargar_sustento_vacaciones():
     """Descarga PDF de sustento desde Drive (file_id en Comments: SUSTENTO_DRIVE:...)."""
     ensure_user_session()
+    json_errors = _descarga_personal_es_fetch()
     if not _usuario_perfil_general_o_minero():
+        if json_errors:
+            return jsonify({'error': 'No autorizado.'}), 403
         flash('No autorizado.', 'warning')
         return redirect(url_for('reporte_aprobar_vacaciones_page'))
 
     solicitud_id = request.args.get('solicitud_id')
     company = _reporte_compania_usuario_logueado()
     if not solicitud_id or not company:
+        if json_errors:
+            return jsonify({'error': 'Solicitud o compañía no indicada.'}), 400
         flash('Solicitud o compañía no indicada.', 'error')
         return redirect(url_for('reporte_aprobar_vacaciones_page'))
 
     drive_id = obtener_drive_file_id_sustento_vacaciones(solicitud_id, company)
     if not drive_id:
+        if json_errors:
+            return jsonify({'error': 'No hay sustento PDF registrado para esta solicitud.'}), 404
         flash('No hay sustento PDF registrado para esta solicitud.', 'error')
         return redirect(url_for('reporte_aprobar_vacaciones_page'))
 
@@ -3081,7 +3093,11 @@ def descargar_sustento_vacaciones():
         archivo_io, nombre_archivo, mime = _descargar_archivo_drive(drive_id)
     except Exception as e:
         logging.exception('descargar_sustento_vacaciones solicitud_id=%s', solicitud_id)
-        flash(_mensaje_error_descarga_drive(e), 'error')
+        msg = _mensaje_error_descarga_drive(e)
+        code = _codigo_error_drive_para_soporte(e)
+        if json_errors:
+            return jsonify({'error': msg, 'code': code}), 502
+        flash(msg, 'error')
         return redirect(url_for('reporte_aprobar_vacaciones_page'))
 
     return send_file(

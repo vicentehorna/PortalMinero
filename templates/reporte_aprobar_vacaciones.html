@@ -194,12 +194,13 @@ document.addEventListener('DOMContentLoaded', async function () {
             );
         }
         if (meta.can_download) {
-            const href = URL_DESCARGAR_SUSTENTO + '?solicitud_id=' + encodeURIComponent(String(meta.id || ''));
+            const downloadUrl = URL_DESCARGAR_SUSTENTO + '?solicitud_id=' +
+                encodeURIComponent(String(meta.id || ''));
             parts.push(
-                '<a href="' + escapeHtml(href) + '" class="btn-descargar-sustento" ' +
-                'title="Descargar sustento PDF" aria-label="Descargar sustento PDF" ' +
-                'target="_blank" rel="noopener noreferrer">' +
-                '<i class="bi bi-cloud-download fs-5" style="' + iconStyle + '"></i></a>'
+                '<button type="button" class="btn btn-link p-0 border-0 btn-descargar-sustento" ' +
+                'data-download-url="' + escapeHtml(downloadUrl) + '" ' +
+                'title="Descargar sustento PDF" aria-label="Descargar sustento PDF">' +
+                '<i class="bi bi-cloud-download fs-5" style="' + iconStyle + '"></i></button>'
             );
         }
         if (!parts.length) return '<span class="text-muted">—</span>';
@@ -276,6 +277,70 @@ document.addEventListener('DOMContentLoaded', async function () {
             });
         });
     }
+
+    function filenameFromContentDisposition(header) {
+        if (!header) return 'Sustento_Vacaciones.pdf';
+        const m = /filename\*=UTF-8''([^;\s]+)/i.exec(header);
+        if (m) {
+            try {
+                return decodeURIComponent(m[1].trim());
+            } catch (e) { /* ignore */ }
+        }
+        const m2 = /filename="([^"]+)"/i.exec(header);
+        if (m2) return m2[1].trim();
+        const m3 = /filename=([^;\s]+)/i.exec(header);
+        if (m3) return m3[1].trim().replace(/^["']|["']$/g, '');
+        return 'Sustento_Vacaciones.pdf';
+    }
+
+    document.getElementById('tbody-aprobar-vac').addEventListener('click', async function (e) {
+        const btn = e.target.closest('.btn-descargar-sustento');
+        if (!btn || btn.disabled) return;
+        e.preventDefault();
+        const url = btn.getAttribute('data-download-url');
+        if (!url) return;
+        btn.disabled = true;
+        const icon = btn.querySelector('i');
+        if (icon) icon.classList.add('opacity-50');
+        try {
+            const res = await fetch(url, {
+                credentials: 'same-origin',
+                headers: { 'X-Fetch-Descarga': '1' },
+            });
+            if (!res.ok) {
+                const text = await res.text().catch(function () { return ''; });
+                let detail = 'No se pudo descargar el sustento (código ' + res.status + ').';
+                try {
+                    const j = JSON.parse(text);
+                    if (j && j.error) detail = j.error;
+                    if (j && j.code) detail += ' (Ref. soporte: ' + j.code + ')';
+                } catch (e2) { /* no es JSON */ }
+                alert(detail);
+                return;
+            }
+            const ctype = (res.headers.get('Content-Type') || '').toLowerCase();
+            if (ctype.indexOf('text/html') !== -1) {
+                alert('La sesión pudo haber expirado. Vuelva a iniciar sesión e intente de nuevo.');
+                return;
+            }
+            const blob = await res.blob();
+            const name = filenameFromContentDisposition(res.headers.get('Content-Disposition'));
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = name;
+            a.rel = 'noopener';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(a.href);
+        } catch (err) {
+            console.error(err);
+            alert('Error de red al descargar el sustento.');
+        } finally {
+            btn.disabled = false;
+            if (icon) icon.classList.remove('opacity-50');
+        }
+    });
 
     async function exportAprobarVacExcel(payload, meta) {
         if (typeof ExcelJS === 'undefined') {
