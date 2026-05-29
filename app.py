@@ -60,6 +60,8 @@ from database import (
     aprobar_solicitud_vacaciones_con_sustento,
     obtener_sustento_drive_ids_por_solicitudes,
     obtener_drive_file_id_sustento_vacaciones,
+    actualizar_ficha_trabajador_drive,
+    obtener_drive_file_id_ficha_trabajador,
     solicitud_vacaciones_tiene_cruce,
     get_resumen_solicitud_vacaciones,
     get_max_dias_vacaciones,
@@ -1144,6 +1146,18 @@ def _carpeta_sustento_vacaciones_desde_env():
     }
 
 
+def _carpeta_ficha_trabajador_desde_env():
+    """Carpeta en unidad compartida para fichas (GOOGLE_DRIVE_FOLDER_FICHA_TRABAJADOR)."""
+    raw_env = str(os.getenv('GOOGLE_DRIVE_FOLDER_FICHA_TRABAJADOR') or '').strip()
+    folder_id = _normalizar_folder_id_drive(raw_env)
+    return {
+        'folder_id': folder_id,
+        'source': 'env:GOOGLE_DRIVE_FOLDER_FICHA_TRABAJADOR',
+        'raw': raw_env,
+        'normalized': folder_id,
+    }
+
+
 def _procesar_carga_desde_carpeta_local_respaldo(ruta_servidor):
     """
     Respaldo de lógica antigua (escaneo de carpeta local en servidor).
@@ -1713,8 +1727,8 @@ def _drive_http_error_reason(exc):
     return str(exc)
 
 
-def _subir_pdf_sustento_drive(folder_id, nombre_archivo, archivo_stream):
-    """Sube un PDF a la carpeta de unidad compartida (GOOGLE_DRIVE_FOLDER_SUSTENTO_VACACIONES). Retorna file_id."""
+def _subir_pdf_unidad_compartida_drive(folder_id, nombre_archivo, archivo_stream, env_var_name):
+    """Sube un PDF a carpeta de unidad compartida. Retorna file_id de Drive."""
     try:
         from googleapiclient.errors import HttpError
         from googleapiclient.http import MediaIoBaseUpload
@@ -1723,17 +1737,20 @@ def _subir_pdf_sustento_drive(folder_id, nombre_archivo, archivo_stream):
             'Falta google-api-python-client para subir archivos a Drive.'
         ) from e
 
+    env_label = str(env_var_name or 'GOOGLE_DRIVE_FOLDER').strip()
+    log_tag = env_label.replace('GOOGLE_DRIVE_FOLDER_', '').lower() or 'drive'
     parent_id = str(folder_id or '').strip()
-    nombre = str(nombre_archivo or 'Sustento_Vacaciones.pdf').strip()
+    nombre = str(nombre_archivo or 'documento.pdf').strip()
     logging.info(
-        'Drive sustento unidad compartida: env=GOOGLE_DRIVE_FOLDER_SUSTENTO_VACACIONES '
-        'parents=%r name=%r supportsAllDrives=True',
+        'Drive %s unidad compartida: env=%s parents=%r name=%r supportsAllDrives=True',
+        log_tag,
+        env_label,
         parent_id,
         nombre,
     )
     print(
-        '[Drive sustento] GOOGLE_DRIVE_FOLDER_SUSTENTO_VACACIONES '
-        f'parents={parent_id!r} file_name={nombre!r} supportsAllDrives=True',
+        f'[Drive {log_tag}] {env_label} parents={parent_id!r} '
+        f'file_name={nombre!r} supportsAllDrives=True',
         flush=True,
     )
 
@@ -1745,27 +1762,16 @@ def _subir_pdf_sustento_drive(folder_id, nombre_archivo, archivo_stream):
             fields='id,name,driveId,mimeType,capabilities',
             supportsAllDrives=True,
         ).execute()
-        logging.info(
-            'Drive sustento: carpeta OK id=%s driveId=%s name=%r canAddChildren=%s',
-            carpeta.get('id'),
-            carpeta.get('driveId'),
-            carpeta.get('name'),
-            (carpeta.get('capabilities') or {}).get('canAddChildren'),
-        )
-        drive_id = str(carpeta.get('driveId') or '').strip()
+        drive_id_carpeta = str(carpeta.get('driveId') or '').strip()
         print(
-            f"[Drive sustento] carpeta verificada id={carpeta.get('id')} "
-            f"driveId={drive_id!r} es_unidad_compartida={bool(drive_id)}",
+            f"[Drive {log_tag}] carpeta verificada id={carpeta.get('id')} "
+            f"driveId={drive_id_carpeta!r} es_unidad_compartida={bool(drive_id_carpeta)}",
             flush=True,
         )
-        if not drive_id:
+        if not drive_id_carpeta:
             raise RuntimeError(
-                'La carpeta de GOOGLE_DRIVE_FOLDER_SUSTENTO_VACACIONES no está en una '
-                'Unidad compartida (Shared Drive): driveId vacío. Las service accounts no tienen '
-                'cuota en "Mi unidad" aunque la carpeta esté compartida como Editor. '
-                'Cree CONSTANCIASVAC dentro de Unidades compartidas (no en Mi unidad), copie el '
-                'ID nuevo de esa carpeta y actualice la variable en Render. '
-                f'ID actual configurado: {parent_id}'
+                f'La carpeta de {env_label} no está en una Unidad compartida (Shared Drive): '
+                f'driveId vacío. ID configurado: {parent_id}'
             )
         caps = carpeta.get('capabilities') or {}
         if caps.get('canAddChildren') is False:
@@ -1777,17 +1783,17 @@ def _subir_pdf_sustento_drive(folder_id, nombre_archivo, archivo_stream):
         status = getattr(getattr(e, 'resp', None), 'status', None)
         reason = _drive_http_error_reason(e)
         logging.exception(
-            'Drive sustento: get carpeta falló parents=%r supportsAllDrives=True reason=%s',
+            'Drive %s: get carpeta falló parents=%r reason=%s',
+            log_tag,
             parent_id,
             reason,
         )
         if status == 404:
             raise RuntimeError(
-                'Carpeta no encontrada (404). Verifique GOOGLE_DRIVE_FOLDER_SUSTENTO_VACACIONES '
-                f'(ID de unidad compartida: {parent_id}).'
+                f'Carpeta no encontrada (404). Verifique {env_label} (ID: {parent_id}).'
             ) from e
         raise RuntimeError(
-            f'No se puede acceder a la carpeta de sustentos (HTTP {status}): {reason}'
+            f'No se puede acceder a la carpeta (HTTP {status}): {reason}'
         ) from e
 
     media = MediaIoBaseUpload(archivo_stream, mimetype='application/pdf', resumable=False)
@@ -1806,38 +1812,19 @@ def _subir_pdf_sustento_drive(folder_id, nombre_archivo, archivo_stream):
         status = getattr(getattr(e, 'resp', None), 'status', None)
         reason = _drive_http_error_reason(e)
         logging.exception(
-            'Drive sustento: create falló parents=%r name=%r supportsAllDrives=True reason=%s',
+            'Drive %s: create falló parents=%r name=%r reason=%s',
+            log_tag,
             parent_id,
             nombre,
             reason,
         )
-        print(
-            f'[Drive sustento] ERROR create status={status} parents={parent_id!r} '
-            f'supportsAllDrives=True reason={reason!r}',
-            flush=True,
-        )
         if status == 404:
             raise RuntimeError(
-                'Carpeta no encontrada al subir (404). Actualice GOOGLE_DRIVE_FOLDER_SUSTENTO_VACACIONES '
-                'con el ID de la carpeta dentro de la unidad compartida.'
-            ) from e
-        if status == 403 and (
-            'storageQuotaExceeded' in reason
-            or 'storage quota' in reason.lower()
-            or 'do not have storage quota' in reason.lower()
-        ):
-            raise RuntimeError(
-                'Google Drive: storageQuotaExceeded. La service account no puede crear archivos '
-                'en "Mi unidad" (sin cuota propia). Aunque use Workspace, el ID en '
-                'GOOGLE_DRIVE_FOLDER_SUSTENTO_VACACIONES debe ser una carpeta DENTRO de una '
-                'Unidad compartida (revise en logs driveId=...; si está vacío, el ID es de Mi unidad). '
-                'Si movió CONSTANCIASVAC a una unidad compartida, copie el ID nuevo de esa carpeta '
-                '(el ID antiguo 1CAnJBa_... de Mi unidad ya no sirve). '
-                f'Detalle API: {reason}'
+                f'Carpeta no encontrada al subir (404). Verifique {env_label}.'
             ) from e
         if status == 403:
             raise RuntimeError(
-                f'Google Drive rechazó la subida (403): {reason}'
+                f'Google Drive rechazó la subida en unidad compartida (403): {reason}'
             ) from e
         raise RuntimeError(
             f'Error al subir a Google Drive (HTTP {status}): {reason}'
@@ -1847,13 +1834,35 @@ def _subir_pdf_sustento_drive(folder_id, nombre_archivo, archivo_stream):
     if not file_id:
         raise RuntimeError('Drive no devolvió el identificador del archivo subido.')
 
-    logging.info(
-        'Drive sustento: archivo creado en unidad compartida file_id=%s parents=%s',
-        file_id,
-        parent_id,
-    )
-    print(f'[Drive sustento] OK file_id={file_id!r} parents={parent_id!r}', flush=True)
+    logging.info('Drive %s: archivo creado file_id=%s parents=%s', log_tag, file_id, parent_id)
+    print(f'[Drive {log_tag}] OK file_id={file_id!r} parents={parent_id!r}', flush=True)
     return file_id
+
+
+def _subir_pdf_sustento_drive(folder_id, nombre_archivo, archivo_stream):
+    """Sube sustento a GOOGLE_DRIVE_FOLDER_SUSTENTO_VACACIONES."""
+    return _subir_pdf_unidad_compartida_drive(
+        folder_id,
+        nombre_archivo,
+        archivo_stream,
+        'GOOGLE_DRIVE_FOLDER_SUSTENTO_VACACIONES',
+    )
+
+
+def _subir_pdf_ficha_trabajador_drive(folder_id, nombre_archivo, archivo_stream):
+    """Sube ficha a GOOGLE_DRIVE_FOLDER_FICHA_TRABAJADOR."""
+    return _subir_pdf_unidad_compartida_drive(
+        folder_id,
+        nombre_archivo,
+        archivo_stream,
+        'GOOGLE_DRIVE_FOLDER_FICHA_TRABAJADOR',
+    )
+
+
+def _nombre_archivo_ficha_trabajador(person):
+    """Nombre en Drive: Ficha_Trabajador_[Codigo].pdf"""
+    codigo = re.sub(r'[^\w\-]+', '_', str(person or '').strip())[:40] or 'SIN_CODIGO'
+    return f'Ficha_Trabajador_{codigo}.pdf'
 
 
 def _normalizar_folder_id_drive(valor):
@@ -2103,6 +2112,19 @@ def reporte_aprobar_vacaciones_page():
         return redirect(_url_inicio_portal())
     return render_template(
         'reporte_aprobar_vacaciones.html',
+        **_reporte_aprobar_vacaciones_template_context(),
+    )
+
+
+@app.route('/reporte-ficha-trabajadores')
+@login_required
+def reporte_ficha_trabajadores_page():
+    ensure_user_session()
+    if not _usuario_perfil_general_o_minero():
+        flash('No tiene permiso para acceder a Fichas de Trabajadores.', 'warning')
+        return redirect(_url_inicio_portal())
+    return render_template(
+        'reporte_ficha_trabajadores.html',
         **_reporte_aprobar_vacaciones_template_context(),
     )
 
@@ -3290,6 +3312,170 @@ def reporte_aprobar_vacaciones_post():
                 conn.close()
             except Exception:
                 pass
+
+
+@app.route('/reporte_ficha_trabajadores', methods=['POST'])
+@login_required
+def reporte_ficha_trabajadores_post():
+    """sp_pr_fichatrabajadores_web @cia, @person, @dni."""
+    ensure_user_session()
+    if not _usuario_perfil_general_o_minero():
+        return jsonify({'error': 'No autorizado.'}), 403
+
+    body = request.get_json(silent=True) or {}
+    cia = _reporte_compania_usuario_logueado()
+    if not cia:
+        cia = str(body.get('cia') or '').strip()
+    person = str(body.get('person') or '0').strip() or '0'
+    dni = str(body.get('dni') or '').strip()
+
+    if not cia:
+        return jsonify({'error': 'No se pudo identificar la compañía del usuario.'}), 400
+
+    headers_es = ['Código', 'Nombre', 'Documento adjunto']
+    keys_datos = ['person', 'name', 'documentoadjunto']
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            'EXEC sp_pr_fichatrabajadores_web @cia=?, @person=?, @dni=?',
+            (cia, person, dni),
+        )
+        rows = _dicts_first_nonempty_resultset(cursor)
+        resultado = []
+        rows_meta = []
+        for r in rows:
+            fila = []
+            for key in keys_datos:
+                fila.append(_jsonable_value(r.get(key)))
+            resultado.append(fila)
+            person_code = str(r.get('person') or '').strip()
+            drive_id = str(r.get('iddocumentogoogle') or '').strip()
+            rows_meta.append({
+                'person': person_code,
+                'name': str(r.get('name') or '').strip(),
+                'documentoadjunto': str(r.get('documentoadjunto') or '').strip(),
+                'can_upload': True,
+                'can_download': bool(drive_id),
+            })
+        headers_es.append('Acciones')
+        return jsonify({'headers': headers_es, 'data': resultado, 'rows_meta': rows_meta})
+    except Exception as e:
+        logging.exception('reporte_ficha_trabajadores_post')
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+@app.route('/ficha-trabajador/subir', methods=['POST'])
+@login_required
+def subir_ficha_trabajador():
+    """Sube PDF de ficha a Drive y actualiza PR_FichaTrabajador.IDdocumentogoogle."""
+    ensure_user_session()
+    if not _usuario_perfil_general_o_minero():
+        return jsonify({'error': 'No autorizado.'}), 403
+
+    person = str(request.form.get('person') or '').strip()
+    company = _reporte_compania_usuario_logueado()
+    archivo = request.files.get('ficha_pdf')
+
+    if not person:
+        return jsonify({'error': 'Trabajador no indicado.'}), 400
+    if not company:
+        return jsonify({'error': 'No se pudo identificar la compañía.'}), 400
+    if not archivo or not archivo.filename:
+        return jsonify({'error': 'Seleccione un archivo PDF de la ficha.'}), 400
+
+    nombre_orig = str(archivo.filename or '').strip().lower()
+    if not nombre_orig.endswith('.pdf'):
+        return jsonify({'error': 'La ficha debe ser un archivo PDF.'}), 400
+
+    carpeta_info = _carpeta_ficha_trabajador_desde_env()
+    folder_id = carpeta_info.get('folder_id')
+    if not folder_id:
+        return jsonify({
+            'error': (
+                'No hay carpeta de Drive para fichas. Defina GOOGLE_DRIVE_FOLDER_FICHA_TRABAJADOR '
+                'con el ID de la carpeta FICHATRABAJADORES en la unidad compartida.'
+            ),
+        }), 400
+
+    try:
+        nombre_drive = _nombre_archivo_ficha_trabajador(person)
+        archivo.stream.seek(0)
+        file_id = _subir_pdf_ficha_trabajador_drive(folder_id, nombre_drive, archivo.stream)
+        user_id = str(getattr(current_user, 'id', None) or session.get('user_id') or '')
+        ok = actualizar_ficha_trabajador_drive(company, person, file_id, user_id)
+        if not ok:
+            return jsonify({
+                'error': (
+                    'El archivo se subió a Drive pero no se pudo actualizar PR_FichaTrabajador. '
+                    'Verifique que exista el registro del trabajador.'
+                ),
+                'drive_file_id': file_id,
+            }), 500
+        return jsonify({
+            'ok': True,
+            'message': 'Ficha cargada correctamente.',
+            'drive_file_id': file_id,
+        })
+    except RuntimeError as e:
+        return jsonify({'error': str(e)}), 502
+    except Exception as e:
+        logging.exception('subir_ficha_trabajador person=%s', person)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/ficha-trabajador/descargar')
+@login_required
+def descargar_ficha_trabajador():
+    """Descarga PDF de ficha desde Drive (IDdocumentogoogle en PR_FichaTrabajador)."""
+    ensure_user_session()
+    json_errors = _descarga_personal_es_fetch()
+    if not _usuario_perfil_general_o_minero():
+        if json_errors:
+            return jsonify({'error': 'No autorizado.'}), 403
+        flash('No autorizado.', 'warning')
+        return redirect(url_for('reporte_ficha_trabajadores_page'))
+
+    person = str(request.args.get('person') or '').strip()
+    company = _reporte_compania_usuario_logueado()
+    if not person or not company:
+        if json_errors:
+            return jsonify({'error': 'Trabajador o compañía no indicada.'}), 400
+        flash('Trabajador o compañía no indicada.', 'error')
+        return redirect(url_for('reporte_ficha_trabajadores_page'))
+
+    drive_id = obtener_drive_file_id_ficha_trabajador(company, person)
+    if not drive_id:
+        if json_errors:
+            return jsonify({'error': 'No hay ficha PDF registrada para este trabajador.'}), 404
+        flash('No hay ficha PDF registrada para este trabajador.', 'error')
+        return redirect(url_for('reporte_ficha_trabajadores_page'))
+
+    try:
+        archivo_io, nombre_archivo, mime = _descargar_archivo_drive(drive_id)
+    except Exception as e:
+        logging.exception('descargar_ficha_trabajador person=%s', person)
+        msg = _mensaje_error_descarga_drive(e)
+        code = _codigo_error_drive_para_soporte(e)
+        if json_errors:
+            return jsonify({'error': msg, 'code': code}), 502
+        flash(msg, 'error')
+        return redirect(url_for('reporte_ficha_trabajadores_page'))
+
+    return send_file(
+        archivo_io,
+        as_attachment=True,
+        download_name=nombre_archivo,
+        mimetype=mime,
+    )
 
 
 @app.route('/sustento-vacaciones/descargar')

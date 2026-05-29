@@ -1580,6 +1580,84 @@ def obtener_drive_file_id_sustento_vacaciones(solicitud_id, company):
     return str(m.get(sid) or '').strip()
 
 
+def actualizar_ficha_trabajador_drive(company, person, drive_file_id, user_id=''):
+    """Guarda IDdocumentogoogle y marca flagAdjunto=Y en PR_FichaTrabajador."""
+    conn = None
+    try:
+        drive_id = str(drive_file_id or '').strip()
+        if not drive_id:
+            return False
+        conn = DatabaseConfig.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE PR_FichaTrabajador
+            SET IDdocumentogoogle = ?,
+                flagAdjunto = 'Y',
+                xlastuser = ?,
+                xlastdate = CONVERT(varchar(19), GETDATE(), 120)
+            WHERE Company = ?
+              AND Person = ?
+            """,
+            (
+                drive_id[:255],
+                str(user_id or '').strip()[:20],
+                str(company or '').strip(),
+                str(person or '').strip(),
+            ),
+        )
+        ok = cursor.rowcount > 0
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return ok
+    except Exception as e:
+        print(f'Error en actualizar_ficha_trabajador_drive: {e}')
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        return False
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def obtener_drive_file_id_ficha_trabajador(company, person):
+    """ID de Google Drive de la ficha del trabajador, o cadena vacía."""
+    conn = None
+    try:
+        conn = DatabaseConfig.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT IDdocumentogoogle
+            FROM PR_FichaTrabajador
+            WHERE Company = ? AND Person = ?
+            """,
+            (str(company or '').strip(), str(person or '').strip()),
+        )
+        row = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        if not row or row[0] is None:
+            return ''
+        return str(row[0]).strip()
+    except Exception as e:
+        print(f'Error en obtener_drive_file_id_ficha_trabajador: {e}')
+        return ''
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 def aprobar_solicitud_vacaciones_con_sustento(solicitud_id, company, approval_user, drive_file_id):
     """
     Aprueba solicitud pendiente y registra el file_id de Drive en Comments (SUSTENTO_DRIVE:...).

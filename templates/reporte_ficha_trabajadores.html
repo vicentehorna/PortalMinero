@@ -1,0 +1,506 @@
+﻿{% extends "layout.html" %}
+
+{% block title %}Fichas de trabajadores{% endblock %}
+
+{% block extra_css %}
+<style>
+    .table-scroll-container {
+        max-height: 65vh;
+        overflow: auto;
+        border: 1px solid #dee2e6;
+    }
+
+    .table-planilla-vertical {
+        --sticky-col1-w: 5.75rem;
+        font-size: 11px;
+        white-space: nowrap;
+        margin-bottom: 0;
+    }
+
+    .table-planilla-vertical th,
+    .table-planilla-vertical td {
+        padding: 0.2rem 0.4rem;
+        vertical-align: middle;
+    }
+
+    .table-planilla-vertical thead th {
+        position: sticky;
+        top: 0;
+        background-color: #f8f9fa;
+        z-index: 2;
+        box-shadow: 0 1px 0 #dee2e6;
+    }
+
+    .table-planilla-vertical .sticky-col-1 {
+        position: sticky;
+        left: 0;
+        z-index: 1;
+        background-color: #fff;
+        min-width: var(--sticky-col1-w);
+        width: var(--sticky-col1-w);
+        max-width: var(--sticky-col1-w);
+        box-sizing: border-box;
+    }
+
+    .table-planilla-vertical .sticky-col-2 {
+        position: sticky;
+        left: var(--sticky-col1-w);
+        z-index: 1;
+        background-color: #fff;
+        min-width: 13rem;
+        max-width: 14rem;
+        box-sizing: border-box;
+    }
+
+    .table-planilla-vertical thead th.sticky-col-1,
+    .table-planilla-vertical thead th.sticky-col-2 {
+        z-index: 3;
+        background-color: #f8f9fa;
+    }
+
+    .vac-filtro-empleado .form-select {
+        min-width: 0;
+    }
+    @media (min-width: 992px) {
+        .vac-filtro-empleado .form-select {
+            min-width: 9.5rem;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="card shadow-sm border-0 mb-4">
+    <div class="card-header bg-white border-bottom-0 pt-4 pb-0">
+        <h5 class="mb-0 fw-bold text-secondary"><i class="bi bi-person-vcard"></i> Fichas de trabajadores</h5>
+    </div>
+    <div class="card-body">
+        <form id="frmFichaTrabajadores" class="row g-2 g-lg-2 align-items-end">
+            <div class="col-12 col-md-4 col-lg-3">
+                <label for="cboCompania" class="form-label small fw-bold text-muted">Compañía</label>
+                <select id="cboCompania" class="form-select form-select-sm" required disabled
+                    title="Compañía de su sesión">
+                    <option value="{{ minero_compania_codigo }}" selected>{{ minero_compania_text }}</option>
+                </select>
+            </div>
+            <div class="col-12 col-sm-6 col-lg-4 vac-filtro-empleado">
+                <label for="cboTrabajador" class="form-label small fw-bold text-muted">Empleado
+                    <span class="fw-normal opacity-75">(opcional)</span>
+                </label>
+                <select id="cboTrabajador" class="form-select form-select-sm" disabled>
+                    <option value="">Todos (por defecto)</option>
+                </select>
+            </div>
+            <div class="col-6 col-sm-4 col-lg-2">
+                <label for="txtDni" class="form-label small fw-bold text-muted">DNI <span class="fw-normal opacity-75">(opcional)</span></label>
+                <input type="text" id="txtDni" class="form-control form-control-sm" placeholder="Buscar..." maxlength="20" autocomplete="off">
+            </div>
+            <div class="col-12 d-flex align-items-center flex-wrap gap-2 border-top pt-3 mt-3">
+                <button type="submit" class="btn btn-primary btn-sm px-4"><i class="bi bi-search"></i> Consultar</button>
+                <button type="button" class="btn btn-success btn-sm px-4" id="btnExportExcelFicha" disabled><i class="bi bi-file-earmark-excel"></i> Exportar a Excel</button>
+                <span class="ms-auto text-muted small fw-bold">No. de Registros: <span id="lblRowCountFicha">0</span></span>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card shadow-sm border-0 d-none" id="cardResultadoFicha">
+    <div class="card-body">
+        <h4 class="text-center fw-bold mb-3">FICHAS DE TRABAJADORES</h4>
+        <div class="table-scroll-container">
+            <table class="table table-bordered table-sm table-hover table-planilla-vertical align-middle">
+                <thead id="thead-ficha"></thead>
+                <tbody id="tbody-ficha"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/filtros_reportes_planillas.js') }}"></script>
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', async function () {
+    const filtrosPersist = window.FiltrosPlanillasReportes && window.FiltrosPlanillasReportes.fichaTrabajadores
+        ? window.FiltrosPlanillasReportes.fichaTrabajadores()
+        : null;
+
+    const URL_REPORTE = {{ url_for('reporte_ficha_trabajadores_post') | tojson }};
+    const URL_SUBIR_FICHA = {{ url_for('subir_ficha_trabajador') | tojson }};
+    const URL_DESCARGAR_FICHA = {{ url_for('descargar_ficha_trabajador') | tojson }};
+    const COMPANIA_CODIGO = {{ (minero_compania_codigo or '') | tojson }};
+    const IDX_STICKY_1 = 0;
+    const IDX_STICKY_2 = 1;
+    const IDX_CENTRO = new Set([2]);
+
+    let lastExportFicha = null;
+    let lastRowsMetaFicha = [];
+    let modalFichaInst = null;
+
+    function escapeHtml(s) {
+        return String(s || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    function optionExists(select, value) {
+        if (!select || value === '' || value == null) return false;
+        return Array.from(select.options).some((o) => o.value === String(value));
+    }
+
+    function etiquetaTrabajadorTodosPorDefecto(selectElement) {
+        if (!selectElement || !selectElement.options.length) return;
+        const o = selectElement.options[0];
+        if (o && o.value === '') o.textContent = 'Todos (por defecto)';
+    }
+
+    function fmtCelda(valor) {
+        if (valor === null || valor === undefined || valor === '') return '';
+        return String(valor);
+    }
+
+    function selectedText(id) {
+        const el = document.getElementById(id);
+        const opt = el && el.options[el.selectedIndex];
+        return opt ? opt.textContent.trim() : '';
+    }
+
+    function celdaAccionesFicha(meta) {
+        if (!meta) return '<span class="text-muted">—</span>';
+        const iconStyle = 'color:#06b6d4;';
+        const parts = [];
+        if (meta.can_upload) {
+            parts.push(
+                '<span role="button" tabindex="0" class="btn-adjuntar-ficha me-2" ' +
+                'data-person="' + escapeHtml(meta.person) + '" ' +
+                'data-person-name="' + escapeHtml(meta.name || '') + '" ' +
+                'title="Adjuntar ficha PDF" aria-label="Adjuntar ficha PDF">' +
+                '<i class="bi bi-cloud-upload fs-5" style="cursor:pointer; ' + iconStyle + '"></i></span>'
+            );
+        }
+        if (meta.can_download) {
+            const downloadUrl = URL_DESCARGAR_FICHA + '?person=' + encodeURIComponent(String(meta.person || ''));
+            parts.push(
+                '<button type="button" class="btn btn-link p-0 border-0 btn-descargar-ficha" ' +
+                'data-download-url="' + escapeHtml(downloadUrl) + '" ' +
+                'title="Descargar ficha PDF" aria-label="Descargar ficha PDF">' +
+                '<i class="bi bi-cloud-download fs-5" style="' + iconStyle + '"></i></button>'
+            );
+        }
+        if (!parts.length) return '<span class="text-muted">—</span>';
+        return '<span class="d-inline-flex align-items-center justify-content-center gap-1">' + parts.join('') + '</span>';
+    }
+
+    function abrirModalFicha(meta) {
+        if (!meta || !modalFichaInst) return;
+        document.getElementById('fichaPerson').value = String(meta.person || '');
+        document.getElementById('ficha_pdf').value = '';
+        const fileNameEl = document.getElementById('fichaFileNameDisplay');
+        if (fileNameEl) {
+            fileNameEl.textContent = 'Ningún documento seleccionado';
+            fileNameEl.classList.add('is-empty');
+        }
+        const errEl = document.getElementById('fichaUploadError');
+        errEl.classList.add('d-none');
+        errEl.textContent = '';
+        const resumen = [
+            meta.person ? 'Código: ' + meta.person : '',
+            meta.name ? 'Nombre: ' + meta.name : '',
+        ].filter(Boolean).join(' · ');
+        document.getElementById('modalFichaResumen').textContent = resumen || 'Trabajador';
+        modalFichaInst.show();
+    }
+
+    function renderizarTabla(response) {
+        const thead = document.getElementById('thead-ficha');
+        const tbody = document.getElementById('tbody-ficha');
+        const headersAll = response.headers || [];
+
+        let htmlHeaders = '<tr>';
+        headersAll.forEach((header, index) => {
+            let sticky = '';
+            if (index === IDX_STICKY_1) sticky = 'sticky-col-1';
+            else if (index === IDX_STICKY_2) sticky = 'sticky-col-2';
+            const cen = (IDX_CENTRO.has(index) || header === 'Acciones') ? ' text-center' : '';
+            htmlHeaders += '<th class="' + sticky + cen + '">' + escapeHtml(header) + '</th>';
+        });
+        htmlHeaders += '</tr>';
+        thead.innerHTML = htmlHeaders;
+
+        const filas = response.data || [];
+        lastRowsMetaFicha = response.rows_meta || [];
+        let htmlBody = '';
+        filas.forEach((rowVals, rowIndex) => {
+            const meta = lastRowsMetaFicha[rowIndex] || {};
+            htmlBody += '<tr>';
+            (rowVals || []).forEach((valor, index) => {
+                let sticky = '';
+                if (index === IDX_STICKY_1) sticky = 'sticky-col-1 font-monospace fw-bold';
+                else if (index === IDX_STICKY_2) sticky = 'sticky-col-2 text-truncate';
+                const align = IDX_CENTRO.has(index) ? 'text-center' : '';
+                htmlBody += '<td class="' + [sticky, align].filter(Boolean).join(' ') + '">' + escapeHtml(fmtCelda(valor)) + '</td>';
+            });
+            htmlBody += '<td class="text-center">' + celdaAccionesFicha(meta) + '</td>';
+            htmlBody += '</tr>';
+        });
+        tbody.innerHTML = htmlBody;
+        document.getElementById('lblRowCountFicha').textContent = String(filas.length);
+
+        tbody.querySelectorAll('.btn-adjuntar-ficha').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                abrirModalFicha({
+                    person: btn.getAttribute('data-person'),
+                    name: btn.getAttribute('data-person-name'),
+                    can_upload: true,
+                });
+            });
+        });
+    }
+
+    function filenameFromContentDisposition(header) {
+        if (!header) return 'Ficha_Trabajador.pdf';
+        const m = /filename\*=UTF-8''([^;\s]+)/i.exec(header);
+        if (m) {
+            try { return decodeURIComponent(m[1].trim()); } catch (e) { /* ignore */ }
+        }
+        const m2 = /filename="([^"]+)"/i.exec(header);
+        if (m2) return m2[1].trim();
+        return 'Ficha_Trabajador.pdf';
+    }
+
+    document.getElementById('tbody-ficha').addEventListener('click', async function (e) {
+        const btn = e.target.closest('.btn-descargar-ficha');
+        if (!btn || btn.disabled) return;
+        e.preventDefault();
+        const url = btn.getAttribute('data-download-url');
+        if (!url) return;
+        btn.disabled = true;
+        const icon = btn.querySelector('i');
+        if (icon) icon.classList.add('opacity-50');
+        try {
+            const res = await fetch(url, {
+                credentials: 'same-origin',
+                headers: { 'X-Fetch-Descarga': '1' },
+            });
+            if (!res.ok) {
+                const text = await res.text().catch(function () { return ''; });
+                let detail = 'No se pudo descargar la ficha (código ' + res.status + ').';
+                try {
+                    const j = JSON.parse(text);
+                    if (j && j.error) detail = j.error;
+                } catch (e2) { /* ignore */ }
+                alert(detail);
+                return;
+            }
+            const blob = await res.blob();
+            const name = filenameFromContentDisposition(res.headers.get('Content-Disposition'));
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = name;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(a.href);
+        } catch (err) {
+            console.error(err);
+            alert('Error de red al descargar la ficha.');
+        } finally {
+            btn.disabled = false;
+            if (icon) icon.classList.remove('opacity-50');
+        }
+    });
+
+    async function exportFichaExcel(payload, meta) {
+        if (typeof ExcelJS === 'undefined') {
+            alert('No se pudo cargar la librería de Excel.');
+            return;
+        }
+        const headers = payload.headers || [];
+        const filas = payload.data || [];
+        const wb = new ExcelJS.Workbook();
+        const ws = wb.addWorksheet('FichasTrabajadores');
+        ws.addRow(['FICHAS DE TRABAJADORES']);
+        ws.addRow(['Compañía:', meta.compania || '']);
+        ws.addRow(['Empleado:', meta.empleado || 'Todos']);
+        ws.addRow([]);
+        ws.addRow(headers);
+        filas.forEach((r) => ws.addRow(r));
+        const buffer = await wb.xlsx.writeBuffer();
+        const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const stamp = new Date().toISOString().slice(0, 10);
+        a.download = 'fichas_trabajadores_' + stamp + '.xlsx';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+    }
+
+    async function ejecutarConsulta() {
+        lastExportFicha = null;
+        document.getElementById('btnExportExcelFicha').disabled = true;
+        if (filtrosPersist) filtrosPersist.guardar();
+
+        const cia = document.getElementById('cboCompania').value.trim();
+        let person = document.getElementById('cboTrabajador').value.trim();
+        if (!person) person = '0';
+        const dni = document.getElementById('txtDni').value.trim();
+
+        try {
+            const res = await fetch(URL_REPORTE, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cia, person, dni }),
+            });
+            const payload = await res.json();
+            if (!res.ok || payload.error) {
+                document.getElementById('cardResultadoFicha').classList.add('d-none');
+                document.getElementById('lblRowCountFicha').textContent = '0';
+                alert(payload.error || 'Error al generar el reporte.');
+                return;
+            }
+            document.getElementById('cardResultadoFicha').classList.remove('d-none');
+            renderizarTabla(payload);
+            const headersResp = payload.headers || [];
+            lastExportFicha = {
+                headers: headersResp[headersResp.length - 1] === 'Acciones'
+                    ? headersResp.slice(0, -1)
+                    : headersResp,
+                data: payload.data,
+                meta: {
+                    compania: selectedText('cboCompania'),
+                    empleado: selectedText('cboTrabajador') || 'Todos',
+                    dni: dni,
+                },
+            };
+            document.getElementById('btnExportExcelFicha').disabled = false;
+        } catch (e) {
+            console.error(e);
+            alert('Error de red o del servidor.');
+        }
+    }
+
+    const poblarSelect = async (url, selectElement) => {
+        selectElement.innerHTML = '';
+        const loading = document.createElement('option');
+        loading.value = '';
+        loading.textContent = 'Cargando...';
+        selectElement.appendChild(loading);
+        try {
+            const res = await fetch(url);
+            const data = await res.json();
+            selectElement.innerHTML = '';
+            const def = document.createElement('option');
+            def.value = '';
+            def.textContent = 'Todos (por defecto)';
+            selectElement.appendChild(def);
+            (Array.isArray(data) ? data : []).forEach((item) => {
+                const opt = document.createElement('option');
+                opt.value = item.id != null ? String(item.id) : '';
+                opt.textContent = item.text != null ? String(item.text) : '';
+                selectElement.appendChild(opt);
+            });
+            selectElement.disabled = false;
+            etiquetaTrabajadorTodosPorDefecto(selectElement);
+        } catch (err) {
+            console.error(err);
+            selectElement.innerHTML = '<option value="">Error</option>';
+        }
+    };
+
+    const cboTrabajador = document.getElementById('cboTrabajador');
+    const modalEl = document.getElementById('modalAdjuntarFicha');
+    if (modalEl && window.bootstrap) {
+        modalFichaInst = bootstrap.Modal.getOrCreateInstance(modalEl);
+    }
+
+    const frmFicha = document.getElementById('frmAdjuntarFicha');
+    if (frmFicha) {
+        frmFicha.addEventListener('submit', async function (e) {
+            e.preventDefault();
+            const errEl = document.getElementById('fichaUploadError');
+            const btn = document.getElementById('btnSubirFicha');
+            errEl.classList.add('d-none');
+            const fd = new FormData(frmFicha);
+            if (!fd.get('ficha_pdf') || !fd.get('ficha_pdf').name) {
+                errEl.textContent = 'Seleccione un archivo PDF.';
+                errEl.classList.remove('d-none');
+                return;
+            }
+            btn.disabled = true;
+            try {
+                const res = await fetch(URL_SUBIR_FICHA, { method: 'POST', body: fd });
+                const data = await res.json();
+                if (!res.ok || data.error) {
+                    errEl.textContent = data.error || 'No se pudo completar la operación.';
+                    errEl.classList.remove('d-none');
+                    return;
+                }
+                if (modalFichaInst) modalFichaInst.hide();
+                alert(data.message || 'Ficha cargada correctamente.');
+                await ejecutarConsulta();
+            } catch (err) {
+                console.error(err);
+                errEl.textContent = 'Error de red o del servidor.';
+                errEl.classList.remove('d-none');
+            } finally {
+                btn.disabled = false;
+            }
+        });
+    }
+
+    async function cargarTrabajadores(cia) {
+        if (!cia) return;
+        await poblarSelect('/api/selectores/trabajadores?cia=' + encodeURIComponent(cia), cboTrabajador);
+    }
+
+    const ciaFix = String(COMPANIA_CODIGO || '').trim();
+    if (ciaFix) {
+        await cargarTrabajadores(ciaFix);
+        if (filtrosPersist) {
+            const guardado = filtrosPersist.leer();
+            if (guardado) {
+                const person = String(guardado.person || '').trim();
+                if (person && optionExists(cboTrabajador, person)) {
+                    cboTrabajador.value = person;
+                }
+                const inpDni = document.getElementById('txtDni');
+                if (inpDni && guardado.dni != null) {
+                    inpDni.value = String(guardado.dni).trim();
+                }
+            }
+        }
+        await ejecutarConsulta();
+    }
+
+    if (filtrosPersist) {
+        filtrosPersist.registrarGuardadoEnCambio();
+    }
+
+    document.getElementById('frmFichaTrabajadores').addEventListener('submit', async function (e) {
+        e.preventDefault();
+        await ejecutarConsulta();
+    });
+
+    document.getElementById('btnExportExcelFicha').addEventListener('click', async function () {
+        if (!lastExportFicha || !lastExportFicha.headers.length) {
+            alert('Ejecute primero una búsqueda con resultados.');
+            return;
+        }
+        try {
+            await exportFichaExcel(
+                { headers: lastExportFicha.headers, data: lastExportFicha.data },
+                lastExportFicha.meta
+            );
+        } catch (err) {
+            console.error(err);
+            alert('No se pudo generar el archivo Excel.');
+        }
+    });
+});
+</script>
+{% endblock %}

@@ -8,6 +8,7 @@
     const STORAGE_KEY_PLANILLA_VERTICAL = 'filtros_planilla_vertical';
     const STORAGE_KEY_VACACIONES_DETALLE = 'filtros_vacaciones_detalle';
     const STORAGE_KEY_APROBAR_VACACIONES = 'filtros_aprobar_vacaciones';
+    const STORAGE_KEY_FICHA_TRABAJADORES = 'filtros_ficha_trabajadores';
     const STORAGE_KEY_DESCANSOS_MEDICOS_DETALLE = 'filtros_descansos_medicos_detalle';
     const STORAGE_KEY_SALDO_VACACIONES = 'filtros_saldo_vacaciones';
     const STORAGE_KEY_PROCESAR_PLANILLA = 'filtros_procesar_planilla';
@@ -347,6 +348,50 @@
         };
     }
 
+    function crearPersistenciaFichaTrabajadores() {
+        function guardar() {
+            try {
+                const estado = {
+                    cia: val('cboCompania'),
+                    person: val('cboTrabajador'),
+                    dni: val('txtDni'),
+                    timestamp: Date.now()
+                };
+                localStorage.setItem(STORAGE_KEY_FICHA_TRABAJADORES, JSON.stringify(estado));
+            } catch (e) {
+                console.warn('filtros ficha trabajadores: no se pudo guardar', e);
+            }
+        }
+
+        function leer() {
+            try {
+                const raw = localStorage.getItem(STORAGE_KEY_FICHA_TRABAJADORES);
+                if (!raw) return null;
+                const o = JSON.parse(raw);
+                if (!o || typeof o !== 'object') return null;
+                return o;
+            } catch (e) {
+                return null;
+            }
+        }
+
+        function registrarGuardadoEnCambio() {
+            ['cboTrabajador', 'txtDni'].forEach((id) => {
+                const el = document.getElementById(id);
+                if (el) el.addEventListener('change', guardar);
+            });
+            const inpDni = document.getElementById('txtDni');
+            if (inpDni) inpDni.addEventListener('input', guardar);
+        }
+
+        return {
+            STORAGE_KEY: STORAGE_KEY_FICHA_TRABAJADORES,
+            guardar,
+            leer,
+            registrarGuardadoEnCambio
+        };
+    }
+
     function crearPersistenciaSaldoVacaciones() {
         function guardar() {
             try {
@@ -558,6 +603,7 @@
         STORAGE_KEY_PLANILLA_VERTICAL,
         STORAGE_KEY_VACACIONES_DETALLE,
         STORAGE_KEY_APROBAR_VACACIONES,
+        STORAGE_KEY_FICHA_TRABAJADORES,
         STORAGE_KEY_SALDO_VACACIONES,
         STORAGE_KEY_DESCANSOS_MEDICOS_DETALLE,
         STORAGE_KEY_PROCESAR_PLANILLA,
@@ -577,6 +623,9 @@
         },
         aprobarVacaciones: function () {
             return crearPersistenciaAprobarVacaciones();
+        },
+        fichaTrabajadores: function () {
+            return crearPersistenciaFichaTrabajadores();
         },
         saldoVacaciones: function () {
             return crearPersistenciaSaldoVacaciones();

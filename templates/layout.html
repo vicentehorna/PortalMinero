@@ -437,6 +437,12 @@
                             <span class="sidebar-link-text">Aprobar vacaciones</span>
                         </a>
                     </li>
+                    <li class="{{ 'active' if request.endpoint == 'reporte_ficha_trabajadores_page' else '' }}">
+                        <a href="{{ url_for('reporte_ficha_trabajadores_page') }}" class="sidebar-link" title="Fichas de trabajadores">
+                            <i class="bi bi-person-vcard sidebar-icon" aria-hidden="true"></i>
+                            <span class="sidebar-link-text">Fichas de trabajadores</span>
+                        </a>
+                    </li>
                     {% endif %}
 
                     {% if not session.get('simple_profile') %}
@@ -534,6 +540,45 @@
                         <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
                         <button type="submit" class="btn btn-primary btn-sm" id="btnSubirAprobarSustento">
                             <i class="bi bi-check2-circle me-1"></i>Subir y Aprobar
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="modalAdjuntarFicha" tabindex="-1" aria-labelledby="modalAdjuntarFichaLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <form id="frmAdjuntarFicha" enctype="multipart/form-data" novalidate>
+                    <div class="modal-header border-0 pb-0">
+                        <h5 class="modal-title fw-bold text-secondary" id="modalAdjuntarFichaLabel">
+                            <i class="bi bi-cloud-upload me-2"></i>Adjuntar ficha del trabajador
+                        </h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p class="small text-muted mb-3" id="modalFichaResumen">—</p>
+                        <input type="hidden" name="person" id="fichaPerson" value="">
+                        <div class="mb-3">
+                            <label class="form-label small fw-bold text-muted">Documento PDF de ficha</label>
+                            <div class="sustento-file-picker">
+                                <input type="file" class="sustento-file-input" id="ficha_pdf" name="ficha_pdf" accept=".pdf" required>
+                                <label for="ficha_pdf" class="btn btn-outline-primary btn-sm sustento-file-btn mb-0">
+                                    Escoger Documentos
+                                </label>
+                                <span id="fichaFileNameDisplay" class="sustento-file-name is-empty" aria-live="polite">
+                                    Ningún documento seleccionado
+                                </span>
+                            </div>
+                            <div class="form-text">Se subirá al servidor en nube.</div>
+                        </div>
+                        <div id="fichaUploadError" class="alert alert-danger py-2 small d-none" role="alert"></div>
+                    </div>
+                    <div class="modal-footer border-0 pt-0">
+                        <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+                        <button type="submit" class="btn btn-primary btn-sm" id="btnSubirFicha">
+                            <i class="bi bi-check2-circle me-1"></i>Subir ficha
                         </button>
                     </div>
                 </form>
@@ -646,6 +691,22 @@
             } else {
                 nameEl.textContent = 'Ningún documento seleccionado';
                 nameEl.classList.add('is-empty');
+            }
+        });
+    })();
+
+    (function () {
+        var inputFicha = document.getElementById('ficha_pdf');
+        var nameElFicha = document.getElementById('fichaFileNameDisplay');
+        if (!inputFicha || !nameElFicha) return;
+        inputFicha.addEventListener('change', function () {
+            var file = inputFicha.files && inputFicha.files[0];
+            if (file) {
+                nameElFicha.textContent = file.name;
+                nameElFicha.classList.remove('is-empty');
+            } else {
+                nameElFicha.textContent = 'Ningún documento seleccionado';
+                nameElFicha.classList.add('is-empty');
             }
         });
     })();

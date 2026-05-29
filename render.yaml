@@ -4,6 +4,7 @@
 # Google Drive (service account): GOOGLE_DRIVE_CREDENTIALS_JSON = contenido completo del JSON (secreto).
 #   Alternativa: GOOGLE_DRIVE_CREDENTIALS_FILE con ruta dentro del contenedor si monta el archivo.
 # Sustentos vacaciones: GOOGLE_DRIVE_FOLDER_SUSTENTO_VACACIONES = ID/URL carpeta (ideal: unidad compartida).
+# Fichas trabajadores: GOOGLE_DRIVE_FOLDER_FICHA_TRABAJADOR = ID carpeta en unidad compartida FICHATRABAJADORES.
 # Si la carpeta está en Mi unidad: GOOGLE_DRIVE_SUSTENTO_IMPERSONATE_USER + delegación dominio (Workspace).
 
 services:
