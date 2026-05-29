@@ -40,6 +40,7 @@ except Exception as _weasy_err:
 from database import (
     User,
     get_datos_usuario_web,
+    get_datos_trabajador_ficha_web,
     get_logoweb_empresa,
     cambiar_password,
     get_db_connection,
@@ -269,6 +270,12 @@ def _usuario_perfil_general_o_minero():
     return bool(session.get('general_profile') or session.get('minero_profile'))
 
 
+def _usuario_perfil_general():
+    """True si el usuario tiene perfil GENERAL."""
+    ensure_user_session()
+    return bool(session.get('general_profile'))
+
+
 def _reporte_compania_usuario_logueado():
     """Compañía del usuario logueado (bloqueo MINERO o company de sesión/login)."""
     lock = _minero_effective_company_lock()
@@ -444,10 +451,12 @@ def _documentos_personal_build_payload(rows, cia, modo='completo'):
 
 
 def _url_inicio_portal():
-    """Página de inicio tras login: dashboard (SIMPLE) o configuración (otros perfiles)."""
+    """Página de inicio tras login: dashboard (SIMPLE), configuración (GENERAL) u otro reporte."""
     if session.get('simple_profile'):
         return url_for('dashboard')
-    return url_for('configuracion_usuario')
+    if session.get('general_profile'):
+        return url_for('configuracion_usuario')
+    return url_for('reporte_documentos_personal_page')
 
 
 def _documentos_personal_redirect_tras_descarga():
@@ -521,6 +530,150 @@ def _jsonable_value(value):
     if isinstance(value, date):
         return value.strftime('%d/%m/%Y')
     return value
+
+
+def _parse_fecha_ficha(value):
+    """Convierte fecha del SP a date (acepta datetime, date o dd/mm/yyyy)."""
+    if value is None or value == '':
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    s = str(value).strip()
+    if not s:
+        return None
+    for fmt in ('%d/%m/%Y', '%Y-%m-%d', '%Y/%m/%d'):
+        try:
+            return datetime.strptime(s[:10], fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _formatear_fecha_ficha(value):
+    d = _parse_fecha_ficha(value)
+    return d.strftime('%d/%m/%Y') if d else ''
+
+
+def _calcular_edad_texto(fecha_nac):
+    d = _parse_fecha_ficha(fecha_nac)
+    if not d:
+        return ''
+    hoy = date.today()
+    anos = hoy.year - d.year - ((hoy.month, hoy.day) < (d.month, d.day))
+    return f'{anos} Años' if anos >= 0 else ''
+
+
+def _calcular_antiguedad_texto(fecha_ingreso):
+    d = _parse_fecha_ficha(fecha_ingreso)
+    if not d:
+        return ''
+    hoy = date.today()
+    anos = hoy.year - d.year
+    meses = hoy.month - d.month
+    dias = hoy.day - d.day
+    if dias < 0:
+        meses -= 1
+        dias += 30
+    if meses < 0:
+        anos -= 1
+        meses += 12
+    if anos < 0:
+        return ''
+    partes = []
+    if anos:
+        partes.append(f'{anos} AÑOS')
+    if meses:
+        partes.append(f'{meses} MESES')
+    if dias or not partes:
+        partes.append(f'{max(dias, 0)} DIAS')
+    return ' '.join(partes)
+
+
+def _formatear_sexo_ficha(sexo):
+    s = str(sexo or '').strip().upper()
+    if s in ('M', 'MASCULINO', 'MALE'):
+        return 'MASCULINO'
+    if s in ('F', 'FEMENINO', 'FEMALE'):
+        return 'FEMENINO'
+    return s or '—'
+
+
+def _logo_url_desde_logoweb(filename):
+    logos_root = os.path.join(app.root_path, LOGOS_EMPRESA_DIR)
+    name = str(filename or '').strip()
+    candidates = [name] if name else []
+    candidates.append(LOGO_EMPRESA_DEFAULT)
+    for candidate in candidates:
+        if candidate and os.path.isfile(os.path.join(logos_root, candidate)):
+            return url_for('static', filename=f'img/logos/{candidate}')
+    return url_for('static', filename=f'img/logos/{LOGO_EMPRESA_DEFAULT}')
+
+
+def _nombre_completo_trabajador_ficha(data):
+    if not data:
+        return ''
+    ap1 = str(data.get('primerapellido') or '').strip()
+    ap2 = str(data.get('segundoapellido') or '').strip()
+    nom = str(data.get('nombres') or '').strip()
+    return ' '.join(p for p in (ap1, ap2, nom) if p).strip()
+
+
+def _ubicacion_trabajador_ficha(data):
+    if not data:
+        return ''
+    partes = [
+        str(data.get('departamento') or '').strip(),
+        str(data.get('provincia') or '').strip(),
+        str(data.get('distrito') or '').strip(),
+    ]
+    partes = [p for p in partes if p]
+    return ' - '.join(partes)
+
+
+def _payload_ficha_trabajador_panel(data, company):
+    cia = str(company or data.get('company') or '').strip()
+    logoweb = str(data.get('logoweb') or get_logoweb_empresa(cia) or '').strip()
+    return {
+        'compania_nombre': _descripcion_compania_selector(cia) if cia else '',
+        'logo_url': _logo_url_desde_logoweb(logoweb),
+        'fotografia_url': None,
+        'fotografia_path': str(data.get('Fotografia') or data.get('fotografia') or '').strip(),
+        'campos': {
+            'dni': str(data.get('NroDocumento') or data.get('nrodocumento') or '').strip(),
+            'nombre_completo': _nombre_completo_trabajador_ficha(data).upper(),
+            'cargo': str(data.get('cargo') or '').strip().upper(),
+            'sueldo': '***',
+            'area': str(data.get('tipoempleado') or '').strip().upper(),
+            'zona': '—',
+            'guardia': '—',
+            'genero': _formatear_sexo_ficha(data.get('sexo')),
+            'fecha_nacimiento': _formatear_fecha_ficha(data.get('FechaNacimiento')),
+            'edad': _calcular_edad_texto(data.get('FechaNacimiento')),
+            'estado_civil': '—',
+            'hijos': '—',
+            'nivel_estudios': str(data.get('NivelInstruccion') or '').strip().upper(),
+            'direccion': str(data.get('Direccion') or '').strip().upper(),
+            'ubicacion': _ubicacion_trabajador_ficha(data).upper(),
+            'celular': str(data.get('Movil') or '').strip(),
+            'correo': str(data.get('email') or '').strip().upper(),
+            'tipo_contrato': str(data.get('tipocontrato') or '').strip().upper() or '***',
+            'fecha_ingreso': _formatear_fecha_ficha(data.get('FechaIngreso')),
+            'fecha_renovacion': '—',
+            'fecha_fin_contrato': '—',
+            'exp_ams': _calcular_antiguedad_texto(data.get('FechaIngreso')),
+            'exp_total': '—',
+            'tipo_documento': str(data.get('TipoDocumento') or '').strip(),
+            'telefono_fijo': str(data.get('TelefonoFijo') or '').strip(),
+            'banco_salario': str(data.get('BancoSalario') or '').strip(),
+            'cuenta_salario': str(data.get('CuentaSalario') or '').strip(),
+            'banco_cts': str(data.get('BancoCTS') or '').strip(),
+            'cuenta_cts': str(data.get('CuentaCTS') or '').strip(),
+            'regimen_pension': str(data.get('Regimenenpension') or '').strip(),
+            'cussp': str(data.get('cussp') or '').strip(),
+        },
+    }
 
 
 def _report_column_name(name):
@@ -1090,7 +1243,7 @@ def logout():
 def dashboard():
     ensure_user_session()
     if not session.get('simple_profile'):
-        return redirect(url_for('configuracion_usuario'))
+        return redirect(_url_inicio_portal())
     nombre = str(session.get('simple_lock_person_name') or '').strip()
     if not nombre and current_user.is_authenticated:
         nombre = str(getattr(current_user, 'nombre', None) or current_user.username or '').strip()
@@ -1889,6 +2042,10 @@ def _normalizar_folder_id_drive(valor):
 @app.route('/configuracion-usuario', methods=['GET', 'POST'])
 @login_required
 def configuracion_usuario():
+    ensure_user_session()
+    if not _usuario_perfil_general():
+        flash('No tiene permiso para acceder a Configuración por usuario.', 'warning')
+        return redirect(_url_inicio_portal())
     if request.method == 'POST':
         ruta = request.form.get('ruta_documentos', '')
         ok, msg = update_ruta_documentos_usuario(current_user.id, ruta)
@@ -1905,6 +2062,10 @@ def configuracion_usuario():
 @app.route('/carga-documentos')
 @login_required
 def carga_documentos():
+    ensure_user_session()
+    if not _usuario_perfil_general():
+        flash('No tiene permiso para acceder a Cargar documentos.', 'warning')
+        return redirect(_url_inicio_portal())
     ruta_efectiva = _ruta_carga_documentos_efectiva(current_user.id)
     return render_template(
         'carga_documentos.html',
@@ -1915,6 +2076,10 @@ def carga_documentos():
 @app.route('/procesar-carga-servidor', methods=['POST'])
 @login_required
 def procesar_carga_servidor():
+    ensure_user_session()
+    if not _usuario_perfil_general():
+        flash('No tiene permiso para sincronizar documentos.', 'warning')
+        return redirect(_url_inicio_portal())
     folder_cfg = _ruta_carga_documentos_efectiva(current_user.id)
     folder_id = _normalizar_folder_id_drive(folder_cfg)
     if not folder_id:
@@ -1967,6 +2132,9 @@ def api_carga_documentos_sincronizar():
     Sincroniza PDF de Drive contra DocumentosBoletas por lotes y emite NDJSON
     (start → progress* → done | error) para barra de progreso en el cliente.
     """
+    ensure_user_session()
+    if not _usuario_perfil_general():
+        return jsonify({'error': 'No autorizado.'}), 403
     folder_cfg = _ruta_carga_documentos_efectiva(current_user.id)
     folder_id = _normalizar_folder_id_drive(folder_cfg)
     if not folder_id:
@@ -2141,7 +2309,7 @@ def solicitud_vacaciones_page():
     ensure_user_session()
     if not session.get('simple_profile'):
         flash('La solicitud de vacaciones está disponible solo para el perfil de trabajador.', 'warning')
-        return redirect(url_for('configuracion_usuario'))
+        return redirect(_url_inicio_portal())
     company = str(getattr(current_user, 'company', None) or session.get('company') or '').strip()
     person = str(getattr(current_user, 'person', None) or session.get('person') or '').strip()
     current_year = datetime.now().year
@@ -3359,8 +3527,9 @@ def reporte_ficha_trabajadores_post():
                 'documentoadjunto': str(r.get('documentoadjunto') or '').strip(),
                 'can_upload': True,
                 'can_download': bool(drive_id),
+                'can_view': bool(person_code),
             })
-        headers_es.append('Acciones')
+        headers_es.extend(['Ver ficha', 'Acciones'])
         return jsonify({'headers': headers_es, 'data': resultado, 'rows_meta': rows_meta})
     except Exception as e:
         logging.exception('reporte_ficha_trabajadores_post')
@@ -3429,6 +3598,32 @@ def subir_ficha_trabajador():
         return jsonify({'error': str(e)}), 502
     except Exception as e:
         logging.exception('subir_ficha_trabajador person=%s', person)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/ficha-trabajador/datos')
+@login_required
+def datos_ficha_trabajador():
+    """Datos del panel Ficha General del Personal (sp_pr_datosusuario_web)."""
+    ensure_user_session()
+    if not _usuario_perfil_general_o_minero():
+        return jsonify({'error': 'No autorizado.'}), 403
+
+    person = str(request.args.get('person') or '').strip()
+    company = _reporte_compania_usuario_logueado()
+    if not person or not company:
+        return jsonify({'error': 'Trabajador o compañía no indicada.'}), 400
+
+    try:
+        data = get_datos_trabajador_ficha_web(company, person)
+        if not data:
+            return jsonify({'error': 'No se encontraron datos del trabajador.'}), 404
+        return jsonify({
+            'ok': True,
+            **_payload_ficha_trabajador_panel(data, company),
+        })
+    except Exception as e:
+        logging.exception('datos_ficha_trabajador person=%s', person)
         return jsonify({'error': str(e)}), 500
 
 

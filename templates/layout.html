@@ -385,6 +385,7 @@
                     </li>
                     {% endif %}
 
+                    {% if session.get('general_profile') %}
                     <li class="py-0">
                         <p class="sidebar-section-title text-uppercase fw-bold opacity-50">Configuración</p>
                     </li>
@@ -402,6 +403,7 @@
                             <span class="sidebar-link-text">Cargar documentos</span>
                         </a>
                     </li>
+                    {% endif %}
 
                     {% if session.get('simple_profile') %}
                     <li class="{{ 'active' if request.endpoint == 'solicitud_vacaciones_page' else '' }}">
@@ -438,9 +440,9 @@
                         </a>
                     </li>
                     <li class="{{ 'active' if request.endpoint == 'reporte_ficha_trabajadores_page' else '' }}">
-                        <a href="{{ url_for('reporte_ficha_trabajadores_page') }}" class="sidebar-link" title="Fichas de trabajadores">
+                        <a href="{{ url_for('reporte_ficha_trabajadores_page') }}" class="sidebar-link" title="Fichas de Personal">
                             <i class="bi bi-person-vcard sidebar-icon" aria-hidden="true"></i>
-                            <span class="sidebar-link-text">Fichas de trabajadores</span>
+                            <span class="sidebar-link-text">Fichas de Personal</span>
                         </a>
                     </li>
                     {% endif %}

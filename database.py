@@ -824,6 +824,38 @@ def get_datos_usuario_web(userid):
         return None
 
 
+def get_datos_trabajador_ficha_web(company, person):
+    """
+    Ejecuta sp_pr_datosusuario_web @cia, @person y retorna datos del trabajador.
+    """
+    cia = str(company or '').strip()
+    per = str(person or '').strip()
+    if not cia or not per:
+        return None
+    try:
+        conn = DatabaseConfig.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            'EXEC sp_pr_datosusuario_web @cia=?, @person=?',
+            (cia, per),
+        )
+        row = cursor.fetchone()
+        if not row:
+            cursor.close()
+            conn.close()
+            return None
+        columns = [c[0] for c in cursor.description] if cursor.description else []
+        data = dict(zip(columns, row))
+        cursor.close()
+        conn.close()
+        if data.get('company') is not None and str(data.get('company') or '').strip():
+            data['logoweb'] = get_logoweb_empresa(data.get('company'))
+        return data
+    except Exception as e:
+        print(f'Error en get_datos_trabajador_ficha_web: {e}')
+        return None
+
+
 def cambiar_password(userid, clave_ant, clave_nueva):
     """
     Llama al SP sp_pr_CambiarPassword_web

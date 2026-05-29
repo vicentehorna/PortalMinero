@@ -66,6 +66,109 @@
             min-width: 9.5rem;
         }
     }
+
+    .ficha-panel-header {
+        background: linear-gradient(180deg, #1a4a7a 0%, #153a62 100%);
+        color: #fff;
+        padding: 0.65rem 1rem;
+        border: 0;
+    }
+
+    .ficha-panel-header .modal-title {
+        color: #fff;
+        font-size: 0.95rem;
+        letter-spacing: 0.04em;
+    }
+
+    .ficha-panel-header .ficha-panel-empresa {
+        font-size: 0.85rem;
+        font-weight: 600;
+        letter-spacing: 0.03em;
+    }
+
+    .ficha-panel-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0;
+        border: 1px solid #94a3b8;
+    }
+
+    @media (max-width: 767.98px) {
+        .ficha-panel-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    .ficha-quadrant {
+        border: 1px solid #94a3b8;
+        min-height: 12rem;
+    }
+
+    .ficha-quadrant-visual {
+        display: flex;
+        align-items: stretch;
+        min-height: 14rem;
+        background: #fff;
+    }
+
+    .ficha-foto-placeholder {
+        flex: 1 1 55%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        border-right: 1px solid #94a3b8;
+        background: #f8fafc;
+        color: #64748b;
+        padding: 1rem;
+        text-align: center;
+    }
+
+    .ficha-foto-placeholder i {
+        font-size: 4rem;
+        opacity: 0.35;
+    }
+
+    .ficha-logo-wrap {
+        flex: 1 1 45%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1rem;
+        background: #fff;
+    }
+
+    .ficha-logo-wrap img {
+        max-width: 100%;
+        max-height: 7rem;
+        object-fit: contain;
+    }
+
+    .ficha-data-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 11px;
+    }
+
+    .ficha-data-table td {
+        border: 1px solid #94a3b8;
+        padding: 0.28rem 0.45rem;
+        vertical-align: middle;
+    }
+
+    .ficha-data-table .ficha-label {
+        width: 38%;
+        background: #b8d4e8;
+        font-weight: 700;
+        text-transform: uppercase;
+        white-space: nowrap;
+    }
+
+    .ficha-data-table .ficha-value {
+        background: #fff;
+        font-weight: 600;
+        word-break: break-word;
+    }
 </style>
 {% endblock %}
 
@@ -115,6 +218,48 @@
         </div>
     </div>
 </div>
+
+<div class="modal fade" id="modalVerFichaTrabajador" tabindex="-1" aria-labelledby="modalVerFichaTrabajadorLabel" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content border-0 shadow">
+            <div class="modal-header ficha-panel-header flex-wrap gap-2">
+                <h5 class="modal-title fw-bold mb-0" id="modalVerFichaTrabajadorLabel">FICHA GENERAL DEL PERSONAL</h5>
+                <span class="ficha-panel-empresa ms-md-auto" id="fichaPanelEmpresa">—</span>
+                <button type="button" class="btn-close btn-close-white ms-0 ms-md-2" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+            </div>
+            <div class="modal-body p-0">
+                <div id="fichaPanelLoading" class="text-center py-5 text-muted d-none">
+                    <div class="spinner-border text-primary mb-2" role="status" aria-hidden="true"></div>
+                    <div class="small">Cargando ficha del trabajador...</div>
+                </div>
+                <div id="fichaPanelError" class="alert alert-danger m-3 d-none" role="alert"></div>
+                <div id="fichaPanelContent" class="d-none">
+                    <div class="ficha-panel-grid">
+                        <div class="ficha-quadrant">
+                            <table class="ficha-data-table" id="fichaTblLaboral"></table>
+                        </div>
+                        <div class="ficha-quadrant ficha-quadrant-visual">
+                            <div class="ficha-foto-placeholder" id="fichaFotoPlaceholder" title="Fotografía (configuración futura)">
+                                <i class="bi bi-person-circle" aria-hidden="true"></i>
+                                <div class="small mt-2 fw-semibold">Fotografía</div>
+                                <div class="small opacity-75">Próximamente</div>
+                            </div>
+                            <div class="ficha-logo-wrap">
+                                <img id="fichaPanelLogo" src="" alt="Logo empresa" class="d-none">
+                            </div>
+                        </div>
+                        <div class="ficha-quadrant">
+                            <table class="ficha-data-table" id="fichaTblPersonal"></table>
+                        </div>
+                        <div class="ficha-quadrant">
+                            <table class="ficha-data-table" id="fichaTblContacto"></table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block extra_js %}
@@ -129,6 +274,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     const URL_REPORTE = {{ url_for('reporte_ficha_trabajadores_post') | tojson }};
     const URL_SUBIR_FICHA = {{ url_for('subir_ficha_trabajador') | tojson }};
     const URL_DESCARGAR_FICHA = {{ url_for('descargar_ficha_trabajador') | tojson }};
+    const URL_DATOS_FICHA = {{ url_for('datos_ficha_trabajador') | tojson }};
     const COMPANIA_CODIGO = {{ (minero_compania_codigo or '') | tojson }};
     const IDX_STICKY_1 = 0;
     const IDX_STICKY_2 = 1;
@@ -137,6 +283,39 @@ document.addEventListener('DOMContentLoaded', async function () {
     let lastExportFicha = null;
     let lastRowsMetaFicha = [];
     let modalFichaInst = null;
+    let modalVerFichaInst = null;
+
+    const FILAS_FICHA_LABORAL = [
+        ['DNI NRO.', 'dni'],
+        ['APE. Y NOM(S)', 'nombre_completo'],
+        ['CARGO', 'cargo'],
+        ['SUELDO', 'sueldo'],
+        ['ÁREA', 'area'],
+        ['ZONA', 'zona'],
+        ['GUARDIA', 'guardia'],
+    ];
+
+    const FILAS_FICHA_PERSONAL = [
+        ['GÉNERO', 'genero'],
+        ['FEC. NAC.', 'fecha_nacimiento'],
+        ['EDAD', 'edad'],
+        ['EST. CIVIL', 'estado_civil'],
+        ['HIJOS', 'hijos'],
+        ['NIV. ESTUDIOS', 'nivel_estudios'],
+        ['DIRECCIÓN', 'direccion'],
+        ['DEPTO.', 'ubicacion'],
+    ];
+
+    const FILAS_FICHA_CONTACTO = [
+        ['CELULAR', 'celular'],
+        ['CORREO', 'correo'],
+        ['TIPO CONTRATO', 'tipo_contrato'],
+        ['FEC. INGRESO', 'fecha_ingreso'],
+        ['FEC. RENOVACIÓN', 'fecha_renovacion'],
+        ['FEC. FIN CONTRATO', 'fecha_fin_contrato'],
+        ['EXP. EN AMS', 'exp_ams'],
+        ['EXP. TOTAL', 'exp_total'],
+    ];
 
     function escapeHtml(s) {
         return String(s || '')
@@ -167,7 +346,18 @@ document.addEventListener('DOMContentLoaded', async function () {
         return opt ? opt.textContent.trim() : '';
     }
 
-    function celdaAccionesFicha(meta) {
+    function celdaVerFicha(meta) {
+        if (!meta || !meta.person) return '<span class="text-muted">—</span>';
+        return (
+            '<button type="button" class="btn btn-link p-0 border-0 btn-ver-ficha-trabajador" ' +
+            'data-person="' + escapeHtml(meta.person) + '" ' +
+            'data-person-name="' + escapeHtml(meta.name || '') + '" ' +
+            'title="Ver ficha del trabajador" aria-label="Ver ficha del trabajador">' +
+            '<i class="bi bi-person-badge fs-5" style="cursor:pointer; color:#06b6d4;"></i></button>'
+        );
+    }
+
+    function celdaAccionesArchivo(meta) {
         if (!meta) return '<span class="text-muted">—</span>';
         const iconStyle = 'color:#06b6d4;';
         const parts = [];
@@ -191,6 +381,87 @@ document.addEventListener('DOMContentLoaded', async function () {
         }
         if (!parts.length) return '<span class="text-muted">—</span>';
         return '<span class="d-inline-flex align-items-center justify-content-center gap-1">' + parts.join('') + '</span>';
+    }
+
+    function renderFichaDataTable(tableId, filasDef, campos) {
+        const tbl = document.getElementById(tableId);
+        if (!tbl) return;
+        let html = '';
+        filasDef.forEach(function (def) {
+            const label = def[0];
+            const key = def[1];
+            const val = campos && campos[key] != null && String(campos[key]).trim() !== ''
+                ? String(campos[key])
+                : '—';
+            html += '<tr><td class="ficha-label">' + escapeHtml(label) + '</td>' +
+                '<td class="ficha-value">' + escapeHtml(val) + '</td></tr>';
+        });
+        tbl.innerHTML = html;
+    }
+
+    function mostrarEstadoPanelFicha(estado) {
+        const loading = document.getElementById('fichaPanelLoading');
+        const content = document.getElementById('fichaPanelContent');
+        const errEl = document.getElementById('fichaPanelError');
+        if (loading) loading.classList.toggle('d-none', estado !== 'loading');
+        if (content) content.classList.toggle('d-none', estado !== 'content');
+        if (errEl) errEl.classList.toggle('d-none', estado !== 'error');
+    }
+
+    async function abrirPanelVerFicha(person) {
+        if (!person || !modalVerFichaInst) return;
+        const errEl = document.getElementById('fichaPanelError');
+        if (errEl) {
+            errEl.textContent = '';
+            errEl.classList.add('d-none');
+        }
+        document.getElementById('fichaPanelEmpresa').textContent = '—';
+        mostrarEstadoPanelFicha('loading');
+        modalVerFichaInst.show();
+
+        try {
+            const res = await fetch(
+                URL_DATOS_FICHA + '?person=' + encodeURIComponent(String(person)),
+                { credentials: 'same-origin' }
+            );
+            const payload = await res.json();
+            if (!res.ok || payload.error) {
+                if (errEl) {
+                    errEl.textContent = payload.error || 'No se pudo cargar la ficha.';
+                    errEl.classList.remove('d-none');
+                }
+                mostrarEstadoPanelFicha('error');
+                return;
+            }
+
+            document.getElementById('fichaPanelEmpresa').textContent =
+                payload.compania_nombre || '—';
+
+            const logoEl = document.getElementById('fichaPanelLogo');
+            if (logoEl) {
+                if (payload.logo_url) {
+                    logoEl.src = payload.logo_url;
+                    logoEl.classList.remove('d-none');
+                } else {
+                    logoEl.removeAttribute('src');
+                    logoEl.classList.add('d-none');
+                }
+            }
+
+            const campos = payload.campos || {};
+            renderFichaDataTable('fichaTblLaboral', FILAS_FICHA_LABORAL, campos);
+            renderFichaDataTable('fichaTblPersonal', FILAS_FICHA_PERSONAL, campos);
+            renderFichaDataTable('fichaTblContacto', FILAS_FICHA_CONTACTO, campos);
+
+            mostrarEstadoPanelFicha('content');
+        } catch (err) {
+            console.error(err);
+            if (errEl) {
+                errEl.textContent = 'Error de red al cargar la ficha.';
+                errEl.classList.remove('d-none');
+            }
+            mostrarEstadoPanelFicha('error');
+        }
     }
 
     function abrirModalFicha(meta) {
@@ -223,7 +494,7 @@ document.addEventListener('DOMContentLoaded', async function () {
             let sticky = '';
             if (index === IDX_STICKY_1) sticky = 'sticky-col-1';
             else if (index === IDX_STICKY_2) sticky = 'sticky-col-2';
-            const cen = (IDX_CENTRO.has(index) || header === 'Acciones') ? ' text-center' : '';
+            const cen = (IDX_CENTRO.has(index) || header === 'Acciones' || header === 'Ver ficha') ? ' text-center' : '';
             htmlHeaders += '<th class="' + sticky + cen + '">' + escapeHtml(header) + '</th>';
         });
         htmlHeaders += '</tr>';
@@ -242,7 +513,8 @@ document.addEventListener('DOMContentLoaded', async function () {
                 const align = IDX_CENTRO.has(index) ? 'text-center' : '';
                 htmlBody += '<td class="' + [sticky, align].filter(Boolean).join(' ') + '">' + escapeHtml(fmtCelda(valor)) + '</td>';
             });
-            htmlBody += '<td class="text-center">' + celdaAccionesFicha(meta) + '</td>';
+            htmlBody += '<td class="text-center">' + celdaVerFicha(meta) + '</td>';
+            htmlBody += '<td class="text-center">' + celdaAccionesArchivo(meta) + '</td>';
             htmlBody += '</tr>';
         });
         tbody.innerHTML = htmlBody;
@@ -255,6 +527,12 @@ document.addEventListener('DOMContentLoaded', async function () {
                     name: btn.getAttribute('data-person-name'),
                     can_upload: true,
                 });
+            });
+        });
+
+        tbody.querySelectorAll('.btn-ver-ficha-trabajador').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                abrirPanelVerFicha(btn.getAttribute('data-person'));
             });
         });
     }
@@ -367,9 +645,9 @@ document.addEventListener('DOMContentLoaded', async function () {
             renderizarTabla(payload);
             const headersResp = payload.headers || [];
             lastExportFicha = {
-                headers: headersResp[headersResp.length - 1] === 'Acciones'
-                    ? headersResp.slice(0, -1)
-                    : headersResp,
+                headers: headersResp.filter(function (h) {
+                    return h !== 'Acciones' && h !== 'Ver ficha';
+                }),
                 data: payload.data,
                 meta: {
                     compania: selectedText('cboCompania'),
@@ -416,6 +694,10 @@ document.addEventListener('DOMContentLoaded', async function () {
     const modalEl = document.getElementById('modalAdjuntarFicha');
     if (modalEl && window.bootstrap) {
         modalFichaInst = bootstrap.Modal.getOrCreateInstance(modalEl);
+    }
+    const modalVerEl = document.getElementById('modalVerFichaTrabajador');
+    if (modalVerEl && window.bootstrap) {
+        modalVerFichaInst = bootstrap.Modal.getOrCreateInstance(modalVerEl);
     }
 
     const frmFicha = document.getElementById('frmAdjuntarFicha');
