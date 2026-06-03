@@ -66,6 +66,7 @@ from database import (
     solicitud_vacaciones_tiene_cruce,
     get_resumen_solicitud_vacaciones,
     consultar_saldo_vacaciones_solicitud,
+    fecha_hoy_peru,
     get_max_dias_vacaciones,
 )
 
@@ -808,11 +809,21 @@ def _disponibles_vacaciones_ejercicio(company, person, control_year):
     year = str(control_year or '').strip()
     if not company or not person or len(year) != 4 or not year.isdigit():
         return 0.0
-    saldo_sp = consultar_saldo_vacaciones_solicitud(company, person, year, datetime.now())
+    saldo_sp = consultar_saldo_vacaciones_solicitud(company, person, year)
     dias_totales = _dias_totales_vacaciones_ejercicio(company)
     resumen = get_resumen_solicitud_vacaciones(company, person, year, dias_totales=dias_totales)
     consumidos = float(int(resumen.get('consumidos') or 0))
-    return max(0.0, saldo_sp - consumidos)
+    disponibles = max(0.0, saldo_sp - consumidos)
+    logging.info(
+        'vacaciones disponibles: company=%s person=%s year=%s saldo_sp=%s consumidos=%s disponibles=%s',
+        company,
+        person,
+        year,
+        saldo_sp,
+        consumidos,
+        disponibles,
+    )
+    return disponibles
 
 
 def _historial_solicitud_vacaciones_items(rows, format_dates=False):
@@ -846,8 +857,8 @@ def _days_between_calendar(fecha_inicio_str, fecha_fin_str):
 
 
 def _validar_fechas_solicitud_vacaciones(date_begin, date_end):
-    """Fechas ISO válidas, no anteriores a hoy y fin >= inicio."""
-    hoy = date.today()
+    """Fechas ISO válidas, no anteriores a hoy (Perú) y fin >= inicio."""
+    hoy = fecha_hoy_peru().date()
     try:
         d1 = datetime.strptime(str(date_begin or '').strip(), '%Y-%m-%d').date()
         d2 = datetime.strptime(str(date_end or '').strip(), '%Y-%m-%d').date()
@@ -2376,7 +2387,9 @@ def solicitud_vacaciones_page():
         flash('La solicitud de vacaciones está disponible solo para el perfil de trabajador.', 'warning')
         return redirect(_url_inicio_portal())
     company, person = _vacaciones_company_person_solicitud()
-    current_year = str(datetime.now().year)
+    hoy_peru = fecha_hoy_peru()
+    current_year = str(hoy_peru.year)
+    fecha_min_hoy = hoy_peru.strftime('%Y-%m-%d')
 
     if request.method == 'POST':
         controlyear_param = str(request.form.get('controlyear') or '').strip()
@@ -2468,6 +2481,7 @@ def solicitud_vacaciones_page():
         kpi_disponibles_num=kpi_disponibles,
         historial=historial,
         rangos_vacaciones=rangos_vacaciones,
+        fecha_min_hoy=fecha_min_hoy,
     )
 
 

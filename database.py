@@ -2,6 +2,7 @@ import logging
 import os
 import pyodbc
 import platform
+from datetime import datetime
 from flask_login import UserMixin
 from dotenv import load_dotenv
 
@@ -1769,27 +1770,40 @@ def _ultima_fila_resultset_sp(cursor):
     return row
 
 
+def fecha_hoy_peru():
+    """
+    Fecha calendario de hoy en Perú (America/Lima).
+    Evita que Render (UTC) use el día siguiente respecto al usuario.
+    """
+    try:
+        from zoneinfo import ZoneInfo
+
+        hoy = datetime.now(ZoneInfo('America/Lima')).date()
+    except Exception:
+        hoy = datetime.now().date()
+    return datetime(hoy.year, hoy.month, hoy.day)
+
+
 def consultar_saldo_vacaciones_solicitud(company, person, control_year, fecha=None):
     """
     Ejecuta sp_pr_consultasaldovacaciones (@company, @date, @person, @controlyear).
     Retorna saldo pendiente de vacaciones para el ejercicio indicado.
-    """
-    from datetime import datetime as dt
 
+    Por defecto @date = hoy en calendario Perú (America/Lima).
+    """
     cia = str(company or '').strip()
     per = str(person or '').strip()
     cy = str(control_year or '').strip()
     if not cia or not per or len(cy) != 4 or not cy.isdigit():
         return 0.0
-    if fecha is None:
-        fecha = dt.now()
+    fecha_consulta = fecha if fecha is not None else fecha_hoy_peru()
     conn = None
     try:
         conn = DatabaseConfig.get_connection()
         cursor = conn.cursor()
         cursor.execute(
             'EXEC sp_pr_consultasaldovacaciones @company=?, @date=?, @person=?, @controlyear=?',
-            (cia, fecha, per, cy),
+            (cia, fecha_consulta, per, cy),
         )
         row = _ultima_fila_resultset_sp(cursor)
         cursor.close()
@@ -1807,7 +1821,7 @@ def consultar_saldo_vacaciones_solicitud(company, person, control_year, fecha=No
             saldo = 0.0
         print(
             f'consultar_saldo_vacaciones_solicitud: company={cia!r} person={per!r} '
-            f'controlyear={cy!r} saldo={saldo}'
+            f'controlyear={cy!r} saldo={saldo} fecha_param={fecha_consulta!r}'
         )
         return max(saldo, 0.0)
     except Exception as e:

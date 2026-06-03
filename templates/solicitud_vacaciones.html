@@ -215,14 +215,14 @@
                                 <i class="bi bi-calendar-date me-1"></i>Fecha inicio
                             </label>
                             <input type="date" class="form-control form-control-sm" id="date_begin" name="date_begin"
-                                min="{{ now.strftime('%Y-%m-%d') if now else '' }}" required>
+                                min="{{ fecha_min_hoy }}" required>
                         </div>
                         <div class="col-6">
                             <label for="date_end" class="form-label-compact">
                                 <i class="bi bi-calendar-date-fill me-1"></i>Fecha fin
                             </label>
                             <input type="date" class="form-control form-control-sm" id="date_end" name="date_end"
-                                min="{{ now.strftime('%Y-%m-%d') if now else '' }}" required>
+                                min="{{ fecha_min_hoy }}" required>
                         </div>
                     </div>
 
@@ -321,14 +321,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const selectedYear = {{ selected_year | tojson }};
     let disponibles = Number({{ kpi_disponibles_num|default(0)|tojson }}) || 0;
     const rangosVacaciones = {{ rangos_vacaciones | tojson }};
-
-    function hoyLocalIso() {
-        const t = new Date();
-        const y = t.getFullYear();
-        const m = String(t.getMonth() + 1).padStart(2, '0');
-        const d = String(t.getDate()).padStart(2, '0');
-        return y + '-' + m + '-' + d;
-    }
+    const minHoy = {{ fecha_min_hoy | tojson }};
 
     function toDate(value) {
         if (!value) return null;
@@ -338,12 +331,11 @@ document.addEventListener('DOMContentLoaded', function () {
 
     function esFechaAnteriorAHoy(iso) {
         const d = toDate(iso);
-        const hoy = toDate(hoyLocalIso());
+        const hoy = toDate(minHoy);
         if (!d || !hoy) return false;
         return d.getTime() < hoy.getTime();
     }
 
-    const minHoy = hoyLocalIso();
     if (dateBegin) dateBegin.min = minHoy;
     if (dateEnd) dateEnd.min = minHoy;
 
