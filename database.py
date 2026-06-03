@@ -1746,6 +1746,81 @@ def aprobar_solicitud_vacaciones_con_sustento(solicitud_id, company, approval_us
                 pass
 
 
+def _ultima_fila_resultset_sp(cursor):
+    """
+    Avanza por todos los result sets del SP y devuelve la última fila con datos
+    (sp_pr_consultasaldovacaciones emite varios sets antes del SELECT final).
+    """
+    row = None
+    while True:
+        try:
+            if cursor.description:
+                fetched = cursor.fetchone()
+                if fetched is not None:
+                    row = fetched
+        except Exception as e:
+            if 'No results' not in str(e) or 'not a query' not in str(e):
+                raise
+        try:
+            if not cursor.nextset():
+                break
+        except Exception:
+            break
+    return row
+
+
+def consultar_saldo_vacaciones_solicitud(company, person, control_year, fecha=None):
+    """
+    Ejecuta sp_pr_consultasaldovacaciones (@company, @date, @person, @controlyear).
+    Retorna saldo pendiente de vacaciones para el ejercicio indicado.
+    """
+    from datetime import datetime as dt
+
+    cia = str(company or '').strip()
+    per = str(person or '').strip()
+    cy = str(control_year or '').strip()
+    if not cia or not per or len(cy) != 4 or not cy.isdigit():
+        return 0.0
+    if fecha is None:
+        fecha = dt.now()
+    conn = None
+    try:
+        conn = DatabaseConfig.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            'EXEC sp_pr_consultasaldovacaciones @company=?, @date=?, @person=?, @controlyear=?',
+            (cia, fecha, per, cy),
+        )
+        row = _ultima_fila_resultset_sp(cursor)
+        cursor.close()
+        conn.close()
+        if not row:
+            print(
+                f'consultar_saldo_vacaciones_solicitud: sin fila company={cia!r} '
+                f'person={per!r} controlyear={cy!r}'
+            )
+            return 0.0
+        saldo_val = row[0]
+        try:
+            saldo = float(saldo_val or 0)
+        except (TypeError, ValueError):
+            saldo = 0.0
+        print(
+            f'consultar_saldo_vacaciones_solicitud: company={cia!r} person={per!r} '
+            f'controlyear={cy!r} saldo={saldo}'
+        )
+        return max(saldo, 0.0)
+    except Exception as e:
+        print(f'Error en consultar_saldo_vacaciones_solicitud: {e}')
+        return 0.0
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 def get_resumen_solicitud_vacaciones(company, person, control_year, dias_totales=30):
     """Calcula días consumidos/solicitados (A+P) y disponibles del ejercicio."""
     conn = None

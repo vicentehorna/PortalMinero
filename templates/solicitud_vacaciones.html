@@ -203,6 +203,9 @@
                             <div id="overlapInvalidFeedback" class="invalid-feedback d-none">
                                 El rango de fechas se cruza con otra solicitud registrada.
                             </div>
+                            <div id="fechaPasadaInvalidFeedback" class="invalid-feedback d-none">
+                                Las fechas deben ser a partir de hoy.
+                            </div>
                         </div>
                     </div>
 
@@ -211,13 +214,15 @@
                             <label for="date_begin" class="form-label-compact">
                                 <i class="bi bi-calendar-date me-1"></i>Fecha inicio
                             </label>
-                            <input type="date" class="form-control form-control-sm" id="date_begin" name="date_begin" required>
+                            <input type="date" class="form-control form-control-sm" id="date_begin" name="date_begin"
+                                min="{{ now.strftime('%Y-%m-%d') if now else '' }}" required>
                         </div>
                         <div class="col-6">
                             <label for="date_end" class="form-label-compact">
                                 <i class="bi bi-calendar-date-fill me-1"></i>Fecha fin
                             </label>
-                            <input type="date" class="form-control form-control-sm" id="date_end" name="date_end" required>
+                            <input type="date" class="form-control form-control-sm" id="date_end" name="date_end"
+                                min="{{ now.strftime('%Y-%m-%d') if now else '' }}" required>
                         </div>
                     </div>
 
@@ -305,6 +310,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const daysCounterValue = document.getElementById('daysCounterValue');
     const daysInvalidFeedback = document.getElementById('daysInvalidFeedback');
     const overlapInvalidFeedback = document.getElementById('overlapInvalidFeedback');
+    const fechaPasadaInvalidFeedback = document.getElementById('fechaPasadaInvalidFeedback');
     const btnEnviar = document.getElementById('btnEnviarSolicitud');
     const cboYear = document.getElementById('controlyear');
     const kpiTotal = document.getElementById('kpiTotal');
@@ -313,14 +319,33 @@ document.addEventListener('DOMContentLoaded', function () {
     const tbodyHistorial = document.getElementById('tbodyHistorialVacaciones');
     const urlApiEjercicio = {{ url_for('api_solicitud_vacaciones_ejercicio') | tojson }};
     const selectedYear = {{ selected_year | tojson }};
-    let disponibles = Number({{ kpi_disponibles|int }}) || 0;
+    let disponibles = Number({{ kpi_disponibles_num|default(0)|tojson }}) || 0;
     const rangosVacaciones = {{ rangos_vacaciones | tojson }};
+
+    function hoyLocalIso() {
+        const t = new Date();
+        const y = t.getFullYear();
+        const m = String(t.getMonth() + 1).padStart(2, '0');
+        const d = String(t.getDate()).padStart(2, '0');
+        return y + '-' + m + '-' + d;
+    }
 
     function toDate(value) {
         if (!value) return null;
         const d = new Date(value + 'T00:00:00');
         return Number.isNaN(d.getTime()) ? null : d;
     }
+
+    function esFechaAnteriorAHoy(iso) {
+        const d = toDate(iso);
+        const hoy = toDate(hoyLocalIso());
+        if (!d || !hoy) return false;
+        return d.getTime() < hoy.getTime();
+    }
+
+    const minHoy = hoyLocalIso();
+    if (dateBegin) dateBegin.min = minHoy;
+    if (dateEnd) dateEnd.min = minHoy;
 
     function rangosSeCruzan(ini, fin) {
         if (!ini || !fin) return false;
@@ -344,6 +369,7 @@ document.addEventListener('DOMContentLoaded', function () {
         let excedeSaldo = false;
         let cruzaRango = false;
         let rangoInvalido = false;
+        let fechaPasada = esFechaAnteriorAHoy(dateBegin.value) || esFechaAnteriorAHoy(dateEnd.value);
 
         if (ini && fin) {
             const diff = Math.floor((fin - ini) / 86400000) + 1;
@@ -356,13 +382,24 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         }
 
-        const invalido = excedeSaldo || cruzaRango || rangoInvalido;
+        const invalido = excedeSaldo || cruzaRango || rangoInvalido || fechaPasada;
         daysInput.value = dias;
         daysCounterValue.textContent = String(dias);
         daysCounter.classList.toggle('is-invalid', invalido);
         daysInvalidFeedback.classList.toggle('d-none', !excedeSaldo);
         overlapInvalidFeedback.classList.toggle('d-none', !cruzaRango);
+        if (fechaPasadaInvalidFeedback) {
+            fechaPasadaInvalidFeedback.classList.toggle('d-none', !fechaPasada);
+        }
         btnEnviar.disabled = invalido || dias <= 0;
+    }
+
+    function actualizarMinFechaFin() {
+        const ini = dateBegin.value;
+        dateEnd.min = ini && ini >= minHoy ? ini : minHoy;
+        if (dateEnd.value && dateEnd.value < dateEnd.min) {
+            dateEnd.value = '';
+        }
     }
 
     function renderHistorial(rows, year) {
@@ -398,13 +435,13 @@ document.addEventListener('DOMContentLoaded', function () {
             if (!res.ok) return;
             kpiTotal.textContent = String(data.kpi_total);
             kpiConsumidos.textContent = String(data.kpi_consumidos);
-            kpiDisponibles.textContent = String(data.kpi_disponibles);
+            const dispTxt = data.kpi_disponibles_fmt != null
+                ? String(data.kpi_disponibles_fmt)
+                : String(data.kpi_disponibles);
+            kpiDisponibles.textContent = dispTxt;
             disponibles = Number(data.kpi_disponibles) || 0;
             renderHistorial(data.historial, year);
             calcularDias();
-            const url = new URL(window.location.href);
-            url.searchParams.set('controlyear', year);
-            window.history.replaceState({}, '', url);
         } catch (e) {
             console.warn('solicitud vacaciones ejercicio:', e);
         } finally {
@@ -418,8 +455,12 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    dateBegin.addEventListener('change', calcularDias);
+    dateBegin.addEventListener('change', function () {
+        actualizarMinFechaFin();
+        calcularDias();
+    });
     dateEnd.addEventListener('change', calcularDias);
+    actualizarMinFechaFin();
     calcularDias();
 });
 </script>

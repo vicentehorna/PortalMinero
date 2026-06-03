@@ -65,6 +65,7 @@ from database import (
     obtener_drive_file_id_ficha_trabajador,
     solicitud_vacaciones_tiene_cruce,
     get_resumen_solicitud_vacaciones,
+    consultar_saldo_vacaciones_solicitud,
     get_max_dias_vacaciones,
 )
 
@@ -331,6 +332,13 @@ def _documentos_personal_template_context():
     return _reporte_filtros_perfil_template_context()
 
 
+def _tipo_documento_oculto_dashboard_simple(codigo, nombre):
+    """Tipos no visibles en tarjetas del dashboard SIMPLE (por ahora)."""
+    c = str(codigo or '').strip().upper()
+    n = str(nombre or '').strip().upper()
+    return c == 'CONTRATOS' or n == 'CONTRATOS'
+
+
 def _tipos_documento_web_catalog():
     """Lista PR_tipodocWeb con metadatos para tarjetas del dashboard SIMPLE."""
     catalog = []
@@ -341,6 +349,8 @@ def _tipos_documento_web_catalog():
         if not codigo:
             continue
         nombre = str(row.get('name') or codigo).strip()
+        if _tipo_documento_oculto_dashboard_simple(codigo, nombre):
+            continue
         meta = _meta_tipo_documento_web(codigo, nombre)
         catalog.append({
             'codigo': codigo,
@@ -767,6 +777,44 @@ def _dias_totales_vacaciones_ejercicio(company):
     return get_max_dias_vacaciones(company) or 30
 
 
+def _vacaciones_company_person_solicitud():
+    """Compañía y Person del trabajador SIMPLE (SB06 / 75164468, no UserID)."""
+    ensure_user_session()
+    company = str(
+        session.get('simple_lock_company')
+        or getattr(current_user, 'company', None)
+        or session.get('company')
+        or ''
+    ).strip()
+    person = str(
+        session.get('simple_lock_person')
+        or getattr(current_user, 'person', None)
+        or session.get('person')
+        or ''
+    ).strip()
+    if session.get('simple_profile') and current_user.is_authenticated:
+        scope = User.get_simple_documentos_scope(current_user.id)
+        if scope:
+            company = str(scope.get('company') or company).strip()
+            person = str(scope.get('person') or person).strip()
+    return company, person
+
+
+def _disponibles_vacaciones_ejercicio(company, person, control_year):
+    """
+    Días pendientes para nuevas solicitudes: saldo del SP menos días ya
+    solicitados (P+A) en PR_SolicitudVacaciones del mismo ejercicio.
+    """
+    year = str(control_year or '').strip()
+    if not company or not person or len(year) != 4 or not year.isdigit():
+        return 0.0
+    saldo_sp = consultar_saldo_vacaciones_solicitud(company, person, year, datetime.now())
+    dias_totales = _dias_totales_vacaciones_ejercicio(company)
+    resumen = get_resumen_solicitud_vacaciones(company, person, year, dias_totales=dias_totales)
+    consumidos = float(int(resumen.get('consumidos') or 0))
+    return max(0.0, saldo_sp - consumidos)
+
+
 def _historial_solicitud_vacaciones_items(rows, format_dates=False):
     """Filas de historial para plantilla o API JSON."""
     historial = []
@@ -795,6 +843,23 @@ def _days_between_calendar(fecha_inicio_str, fecha_fin_str):
     if d2 < d1:
         return 0
     return (d2 - d1).days + 1
+
+
+def _validar_fechas_solicitud_vacaciones(date_begin, date_end):
+    """Fechas ISO válidas, no anteriores a hoy y fin >= inicio."""
+    hoy = date.today()
+    try:
+        d1 = datetime.strptime(str(date_begin or '').strip(), '%Y-%m-%d').date()
+        d2 = datetime.strptime(str(date_end or '').strip(), '%Y-%m-%d').date()
+    except (TypeError, ValueError):
+        return False, 'Las fechas no son válidas.'
+    if d1 < hoy:
+        return False, 'La fecha de inicio no puede ser anterior a hoy.'
+    if d2 < hoy:
+        return False, 'La fecha de fin no puede ser anterior a hoy.'
+    if d2 < d1:
+        return False, 'La fecha de fin debe ser igual o posterior a la de inicio.'
+    return True, ''
 
 
 def _report_params_from_json(req):
@@ -2310,12 +2375,20 @@ def solicitud_vacaciones_page():
     if not session.get('simple_profile'):
         flash('La solicitud de vacaciones está disponible solo para el perfil de trabajador.', 'warning')
         return redirect(_url_inicio_portal())
-    company = str(getattr(current_user, 'company', None) or session.get('company') or '').strip()
-    person = str(getattr(current_user, 'person', None) or session.get('person') or '').strip()
-    current_year = datetime.now().year
-    selected_year = str(request.form.get('controlyear') or request.args.get('controlyear') or current_year).strip()
-    if not re.fullmatch(r'\d{4}', selected_year):
-        selected_year = str(current_year)
+    company, person = _vacaciones_company_person_solicitud()
+    current_year = str(datetime.now().year)
+
+    if request.method == 'POST':
+        controlyear_param = str(request.form.get('controlyear') or '').strip()
+        selected_year = controlyear_param if re.fullmatch(r'\d{4}', controlyear_param) else current_year
+    else:
+        controlyear_param = str(request.args.get('controlyear') or '').strip()
+        if re.fullmatch(r'\d{4}', controlyear_param):
+            # Tras eliminar/registrar solicitud (redirect con ejercicio)
+            selected_year = controlyear_param
+        else:
+            # Al abrir la ventana: ejercicio = año actual
+            selected_year = current_year
 
     if request.method == 'POST' and request.form.get('action') == 'delete':
         solicitud_id = request.form.get('solicitud_id')
@@ -2335,47 +2408,47 @@ def solicitud_vacaciones_page():
         date_end = str(request.form.get('date_end') or '').strip()
         comments = str(request.form.get('comments') or '').strip()
         days = _days_between_calendar(date_begin, date_end)
-        dias_totales = _dias_totales_vacaciones_ejercicio(company)
-        resumen = get_resumen_solicitud_vacaciones(
-            company, person, selected_year, dias_totales=dias_totales
-        )
-        disponibles = int(resumen.get('disponibles') or 0)
+        disponibles = _disponibles_vacaciones_ejercicio(company, person, selected_year)
 
         if not company or not person:
             flash('No se pudo identificar su usuario. Vuelva a iniciar sesión.', 'error')
         elif not date_begin or not date_end:
             flash('Seleccione fecha de inicio y fin.', 'warning')
-        elif days <= 0:
-            flash('El rango de fechas no es válido.', 'warning')
-        elif days > disponibles:
-            flash('Los días solicitados superan el saldo disponible del ejercicio.', 'warning')
-        elif solicitud_vacaciones_tiene_cruce(company, person, date_begin, date_end):
-            flash('El rango de fechas se cruza con otra solicitud de vacaciones registrada.', 'warning')
         else:
-            ok = registrar_solicitud_vacaciones(
-                company=company,
-                person=person,
-                date_begin=date_begin,
-                date_end=date_end,
-                days=days,
-                comments=comments,
-                control_year=selected_year,
-                user_id=current_user.id,
-            )
-            if ok:
-                flash('Solicitud de vacaciones registrada correctamente.', 'success')
-                return redirect(url_for('solicitud_vacaciones_page', controlyear=selected_year))
-            if solicitud_vacaciones_tiene_cruce(company, person, date_begin, date_end):
+            ok_fechas, msg_fechas = _validar_fechas_solicitud_vacaciones(date_begin, date_end)
+            if not ok_fechas:
+                flash(msg_fechas, 'warning')
+            elif days <= 0:
+                flash('El rango de fechas no es válido.', 'warning')
+            elif days > disponibles:
+                flash('Los días solicitados superan el saldo disponible del ejercicio.', 'warning')
+            elif solicitud_vacaciones_tiene_cruce(company, person, date_begin, date_end):
                 flash('El rango de fechas se cruza con otra solicitud de vacaciones registrada.', 'warning')
             else:
-                flash('No se pudo registrar la solicitud. Intente nuevamente.', 'error')
+                ok = registrar_solicitud_vacaciones(
+                    company=company,
+                    person=person,
+                    date_begin=date_begin,
+                    date_end=date_end,
+                    days=days,
+                    comments=comments,
+                    control_year=selected_year,
+                    user_id=current_user.id,
+                )
+                if ok:
+                    flash('Solicitud de vacaciones registrada correctamente.', 'success')
+                    return redirect(url_for('solicitud_vacaciones_page', controlyear=selected_year))
+                if solicitud_vacaciones_tiene_cruce(company, person, date_begin, date_end):
+                    flash('El rango de fechas se cruza con otra solicitud de vacaciones registrada.', 'warning')
+                else:
+                    flash('No se pudo registrar la solicitud. Intente nuevamente.', 'error')
 
     historial_rows = get_historial_solicitud_vacaciones(company, person, selected_year)
     historial = _historial_solicitud_vacaciones_items(historial_rows)
     historial_todos = get_historial_solicitud_vacaciones(company, person, None) if company and person else []
 
     years = sorted(
-        {str(current_year - 1), str(current_year), str(current_year + 1), selected_year}
+        {str(int(current_year) - 1), current_year, str(int(current_year) + 1), selected_year}
         | {str(r.get('ControlYear') or '').strip() for r in historial_todos if r.get('ControlYear')},
         reverse=True,
     )
@@ -2383,6 +2456,7 @@ def solicitud_vacaciones_page():
     resumen = get_resumen_solicitud_vacaciones(
         company, person, selected_year, dias_totales=dias_totales
     )
+    kpi_disponibles = _disponibles_vacaciones_ejercicio(company, person, selected_year)
     rangos_vacaciones = get_rangos_solicitud_vacaciones(company, person) if company and person else []
     return render_template(
         'solicitud_vacaciones.html',
@@ -2390,7 +2464,8 @@ def solicitud_vacaciones_page():
         selected_year=selected_year,
         kpi_total=int(resumen.get('total') or dias_totales),
         kpi_consumidos=int(resumen.get('consumidos') or 0),
-        kpi_disponibles=int(resumen.get('disponibles') or 0),
+        kpi_disponibles='%.2f' % kpi_disponibles,
+        kpi_disponibles_num=kpi_disponibles,
         historial=historial,
         rangos_vacaciones=rangos_vacaciones,
     )
@@ -2403,8 +2478,7 @@ def api_solicitud_vacaciones_ejercicio():
     ensure_user_session()
     if not session.get('simple_profile'):
         return jsonify({'error': 'No autorizado.'}), 403
-    company = str(getattr(current_user, 'company', None) or session.get('company') or '').strip()
-    person = str(getattr(current_user, 'person', None) or session.get('person') or '').strip()
+    company, person = _vacaciones_company_person_solicitud()
     control_year = str(request.args.get('controlyear') or '').strip()
     if not re.fullmatch(r'\d{4}', control_year):
         return jsonify({'error': 'Ejercicio inválido'}), 400
@@ -2417,11 +2491,13 @@ def api_solicitud_vacaciones_ejercicio():
     )
     historial_rows = get_historial_solicitud_vacaciones(company, person, control_year)
     historial = _historial_solicitud_vacaciones_items(historial_rows, format_dates=True)
+    kpi_disp = _disponibles_vacaciones_ejercicio(company, person, control_year)
     return jsonify({
         'controlyear': control_year,
         'kpi_total': int(resumen.get('total') or dias_totales),
         'kpi_consumidos': int(resumen.get('consumidos') or 0),
-        'kpi_disponibles': int(resumen.get('disponibles') or 0),
+        'kpi_disponibles': kpi_disp,
+        'kpi_disponibles_fmt': '%.2f' % kpi_disp,
         'historial': historial,
     })
 
