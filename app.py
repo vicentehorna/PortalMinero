@@ -52,6 +52,9 @@ from database import (
     sincronizar_metadata_drive_lote,
     ejecutar_sp_updatecompany_documentos_boletas,
     actualizar_fechadescarga_boleta,
+    get_fechas_primera_descarga_boletas,
+    actualizar_fechaprimeradescarga_boleta,
+    documento_requiere_confirmacion_primera_boleta,
     update_ruta_documentos_usuario,
     get_tipos_documentos,
     get_historial_solicitud_vacaciones,
@@ -409,6 +412,11 @@ def _documentos_personal_fetch_rows(cia, period, tipodoc, person, dni):
 
 def _documentos_personal_build_payload(rows, cia, modo='completo'):
     """Arma headers/data JSON del reporte de documentos (completo o SIMPLE/móvil)."""
+    fechas_primera = {}
+    if modo == 'simple' and rows:
+        doc_ids = [r.get('id') for r in rows if r.get('id') is not None]
+        fechas_primera = get_fechas_primera_descarga_boletas(doc_ids)
+
     if modo == 'simple':
         headers_es = ['Periodo', 'Fecha descarga', 'Descargar']
         resultado = []
@@ -417,6 +425,12 @@ def _documentos_personal_build_payload(rows, cia, modo='completo'):
             drive_id = str(r.get('drivefileid') or '').strip()
             tipo_doc = _jsonable_value(r.get('tipodocumento'))
             dni = str(r.get('person') or '').strip()
+            doc_id = r.get('id')
+            fp_descarga = fechas_primera.get(doc_id) if doc_id is not None else None
+            if fp_descarga is None:
+                fp_descarga = r.get('fechaprimeradescarga')
+            es_bol = str(tipo_doc or '').strip().upper() == 'BOL'
+            requiere_confirmacion = bool(es_bol and doc_id is not None and not fp_descarga)
             resultado.append([
                 periodo_doc,
                 _fmt_fecha_hora_dd_mm_yyyy_hh_mm(r.get('fechadescarga')),
@@ -426,6 +440,8 @@ def _documentos_personal_build_payload(rows, cia, modo='completo'):
                     'period': str(r.get('periodo') or '').strip(),
                     'tipodocumento': str(tipo_doc or '').strip(),
                     'cia': cia,
+                    'id': doc_id,
+                    'requiere_confirmacion': requiere_confirmacion,
                 },
             ])
         return {'headers': headers_es, 'data': resultado}
@@ -4018,6 +4034,8 @@ def descargar_documento_personal():
     person = str(request.args.get('person') or '').strip()
     period = str(request.args.get('period') or '').strip()
     tipodocumento = str(request.args.get('tipodocumento') or '').strip()
+    doc_id = str(request.args.get('doc_id') or '').strip()
+    confirmacion_primera = str(request.args.get('confirmacion_primera') or '').strip() == '1'
     cia = str(request.args.get('cia') or '').strip() or str(session.get('company') or '').strip()
     if lock_cia:
         cia = lock_cia
@@ -4030,6 +4048,28 @@ def descargar_documento_personal():
             return jsonify({'error': 'No se encontró el archivo de Google Drive (file_id vacío).'}), 400
         flash('No se encontró el archivo de Google Drive.', 'error')
         return _documentos_personal_redirect_tras_descarga()
+
+    if (
+        session.get('simple_profile')
+        and tipodocumento.upper() == 'BOL'
+        and doc_id
+        and cia
+        and person
+    ):
+        pendiente_confirmacion = documento_requiere_confirmacion_primera_boleta(doc_id, cia, person)
+        if pendiente_confirmacion and not confirmacion_primera:
+            msg = 'Debe confirmar la recepción de su boleta de pago antes de descargar.'
+            if json_errors:
+                return jsonify({'error': msg, 'requires_confirmation': True}), 428
+            flash(msg, 'warning')
+            return _documentos_personal_redirect_tras_descarga()
+        if confirmacion_primera and pendiente_confirmacion:
+            if not actualizar_fechaprimeradescarga_boleta(doc_id, cia, person):
+                msg = 'No se pudo registrar la confirmación de recepción de la boleta.'
+                if json_errors:
+                    return jsonify({'error': msg}), 500
+                flash(msg, 'error')
+                return _documentos_personal_redirect_tras_descarga()
 
     try:
         archivo_io, nombre_archivo, mime = _descargar_archivo_drive(drive_id)

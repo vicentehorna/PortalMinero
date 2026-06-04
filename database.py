@@ -1218,6 +1218,126 @@ def actualizar_fechadescarga_boleta(company, person, tipodocumento, period):
                 pass
 
 
+def get_fechas_primera_descarga_boletas(documento_ids):
+    """Mapa Id → FechaPrimeraDescarga para los documentos indicados."""
+    ids = []
+    for raw in documento_ids or []:
+        try:
+            ids.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+    if not ids:
+        return {}
+    conn = None
+    try:
+        conn = DatabaseConfig.get_connection()
+        cursor = conn.cursor()
+        placeholders = ','.join('?' * len(ids))
+        cursor.execute(
+            f"""
+            SELECT Id, FechaPrimeraDescarga
+            FROM DocumentosBoletas
+            WHERE Id IN ({placeholders})
+            """,
+            ids,
+        )
+        out = {}
+        for row in cursor.fetchall():
+            out[row[0]] = row[1]
+        cursor.close()
+        return out
+    except Exception as e:
+        print(f"Error en get_fechas_primera_descarga_boletas: {e}")
+        return {}
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def documento_requiere_confirmacion_primera_boleta(documento_id, company, person):
+    """True si la boleta aún no tiene FechaPrimeraDescarga registrada."""
+    try:
+        doc_id = int(documento_id)
+    except (TypeError, ValueError):
+        return False
+    conn = None
+    try:
+        conn = DatabaseConfig.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT 1
+            FROM DocumentosBoletas
+            WHERE Id = ?
+              AND Company = ?
+              AND DNI = ?
+              AND TipoDocumento = 'BOL'
+              AND FechaPrimeraDescarga IS NULL
+            """,
+            (doc_id, company, person),
+        )
+        row = cursor.fetchone()
+        cursor.close()
+        return bool(row)
+    except Exception as e:
+        print(f"Error en documento_requiere_confirmacion_primera_boleta: {e}")
+        return False
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def actualizar_fechaprimeradescarga_boleta(documento_id, company, person):
+    """
+    Registra FechaPrimeraDescarga al confirmar recepción (solo la primera vez).
+    No modifica FechaDescarga.
+    """
+    try:
+        doc_id = int(documento_id)
+    except (TypeError, ValueError):
+        return False
+    conn = None
+    try:
+        conn = DatabaseConfig.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE DocumentosBoletas
+            SET FechaPrimeraDescarga = GETDATE()
+            WHERE Id = ?
+              AND Company = ?
+              AND DNI = ?
+              AND TipoDocumento = 'BOL'
+              AND FechaPrimeraDescarga IS NULL
+            """,
+            (doc_id, company, person),
+        )
+        conn.commit()
+        ok = cursor.rowcount > 0
+        cursor.close()
+        return ok
+    except Exception as e:
+        print(f"Error en actualizar_fechaprimeradescarga_boleta: {e}")
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        return False
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 def registrar_comprobante_web(company, payrolltype, processtype, period, person, userid, filename, tipo='BOL'):
     """Registra el comprobante generado en PR_DocumentPerson. SP sp_pr_registrarcomprobantes_web"""
     try:
