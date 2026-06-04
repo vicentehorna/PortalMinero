@@ -2458,11 +2458,9 @@ def solicitud_vacaciones_page():
 
     historial_rows = get_historial_solicitud_vacaciones(company, person, selected_year)
     historial = _historial_solicitud_vacaciones_items(historial_rows)
-    historial_todos = get_historial_solicitud_vacaciones(company, person, None) if company and person else []
 
     years = sorted(
-        {str(int(current_year) - 1), current_year, str(int(current_year) + 1), selected_year}
-        | {str(r.get('ControlYear') or '').strip() for r in historial_todos if r.get('ControlYear')},
+        {str(y) for y in range(2020, int(current_year) + 2)} | {selected_year},
         reverse=True,
     )
     dias_totales = _dias_totales_vacaciones_ejercicio(company)

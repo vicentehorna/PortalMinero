@@ -866,7 +866,7 @@ body {
 
 .logo-container {
     display: inline-block;
-    padding: 10px;
+    padding: 12px 20px;
     background: #ffffff;
     border-radius: 1.25rem;
     box-shadow: 0 15px 30px -5px rgba(56, 189, 248, 0.25);
@@ -875,6 +875,13 @@ body {
 
 .logo-container img {
     display: block;
+}
+
+.logo-container .login-logo {
+    width: auto;
+    max-width: 220px;
+    height: 72px;
+    object-fit: contain;
 }
 
 /* Formulario */
