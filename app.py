@@ -1403,6 +1403,71 @@ def _carpeta_ficha_trabajador_desde_env():
     }
 
 
+def _carpeta_documentos_internos_desde_env():
+    """Carpeta de documentos internos INT (GOOGLE_DRIVE_FOLDER_DOCUMENTOS_INTERNOS)."""
+    raw_env = str(os.getenv('GOOGLE_DRIVE_FOLDER_DOCUMENTOS_INTERNOS') or '').strip()
+    folder_id = _normalizar_folder_id_drive(raw_env)
+    return {
+        'folder_id': folder_id,
+        'source': 'env:GOOGLE_DRIVE_FOLDER_DOCUMENTOS_INTERNOS',
+        'raw': raw_env,
+        'normalized': folder_id,
+    }
+
+
+def _es_archivo_documento_interno_int(item):
+    nombre = str((item or {}).get('name') or '').strip()
+    base = nombre[:-4] if nombre.lower().endswith('.pdf') else nombre
+    base = base.strip()
+    if not base or base.count('_') < 3:
+        return False
+    return str(base.split('_')[0]).strip().upper() == 'INT'
+
+
+def _listar_archivos_pdf_carga_documentos(folder_id_principal):
+    """
+    PDF de la carpeta principal (boletas, etc.) más la carpeta opcional de documentos internos.
+    En la carpeta interna solo se incluyen archivos INT_*.
+    """
+    archivos = _listar_archivos_pdf_drive(folder_id_principal)
+    vistos = {str(a.get('id') or '').strip() for a in archivos if a.get('id')}
+
+    cfg_int = _carpeta_documentos_internos_desde_env()
+    folder_int = cfg_int.get('folder_id')
+    if folder_int and folder_int != folder_id_principal:
+        for item in _listar_archivos_pdf_drive(folder_int):
+            fid = str(item.get('id') or '').strip()
+            if not fid or fid in vistos:
+                continue
+            if not _es_archivo_documento_interno_int(item):
+                continue
+            archivos.append(item)
+            vistos.add(fid)
+
+    return archivos
+
+
+def _texto_resumen_stats_sync_documentos(stats):
+    s = stats or {}
+    partes = [
+        f"Procesados: {s.get('procesados', 0)}.",
+        f"Insert/actualización: {s.get('ok', 0)}.",
+        f"Omitidos (formato): {s.get('omitidos_formato', 0)}.",
+        f"Omitidos (nombre muy largo): {s.get('omitidos_largo', 0)}.",
+        f"Sin ID: {s.get('sin_id', 0)}.",
+    ]
+    if s.get('internos_archivos'):
+        partes.append(
+            f"Documentos internos (INT): {s.get('internos_archivos', 0)} archivo(s), "
+            f"{s.get('internos_registros', 0)} registro(s) en trabajadores."
+        )
+    if s.get('internos_sin_personas'):
+        partes.append(
+            f"INT sin trabajadores activos: {s.get('internos_sin_personas', 0)}."
+        )
+    return ' '.join(partes)
+
+
 def _procesar_carga_desde_carpeta_local_respaldo(ruta_servidor):
     """
     Respaldo de lógica antigua (escaneo de carpeta local en servidor).
@@ -2159,9 +2224,11 @@ def carga_documentos():
         flash('No tiene permiso para acceder a Cargar documentos.', 'warning')
         return redirect(_url_inicio_portal())
     ruta_efectiva = _ruta_carga_documentos_efectiva(current_user.id)
+    cfg_internos = _carpeta_documentos_internos_desde_env()
     return render_template(
         'carga_documentos.html',
         ruta_servidor=ruta_efectiva,
+        ruta_documentos_internos=cfg_internos.get('folder_id') or '',
     )
 
 
@@ -2181,7 +2248,7 @@ def procesar_carga_servidor():
         )
         return redirect(url_for('carga_documentos'))
     try:
-        archivos_drive = _listar_archivos_pdf_drive(folder_id)
+        archivos_drive = _listar_archivos_pdf_carga_documentos(folder_id)
         rename_stats = _renombrar_boletas_fin_de_mes_en_drive(archivos_drive)
         stats = sincronizar_metadata_drive(archivos_drive)
         ok_sp, msg_sp = ejecutar_sp_updatecompany_documentos_boletas()
@@ -2191,11 +2258,7 @@ def procesar_carga_servidor():
             f'Renombrados FIN_DE_MES→BOL: {rename_stats.get("renombrados", 0)} '
             f'(detectados: {rename_stats.get("detectados", 0)}, '
             f'fallidos en Drive: {rename_stats.get("fallidos", 0)}). '
-            f'Procesados: {stats.get("procesados", 0)}. '
-            f'Sincronizados (insert/update): {stats.get("ok", 0)}. '
-            f'Omitidos por formato: {stats.get("omitidos_formato", 0)}. '
-            f'Omitidos (nombre muy largo): {stats.get("omitidos_largo", 0)}. '
-            f'Sin ID de Drive: {stats.get("sin_id", 0)}.'
+            f'{_texto_resumen_stats_sync_documentos(stats)}'
         )
         flash(resumen, 'success' if stats.get('ok') else 'warning')
         if not stats.get('ok'):
@@ -2243,7 +2306,7 @@ def api_carga_documentos_sincronizar():
         conn = None
         cursor = None
         try:
-            archivos = _listar_archivos_pdf_drive(folder_id)
+            archivos = _listar_archivos_pdf_carga_documentos(folder_id)
             rename_stats = _renombrar_boletas_fin_de_mes_en_drive(archivos)
             total = len(archivos)
             yield (
@@ -2260,13 +2323,17 @@ def api_carga_documentos_sincronizar():
                 'omitidos_largo': 0,
                 'sin_id': 0,
                 'ok': 0,
+                'internos_archivos': 0,
+                'internos_registros': 0,
+                'internos_sin_personas': 0,
             }
             conn = get_db_connection()
             cursor = conn.cursor()
+            cache_personas = {}
 
             for i in range(0, total, batch):
                 chunk = archivos[i : i + batch]
-                sincronizar_metadata_drive_lote(cursor, chunk, cum)
+                sincronizar_metadata_drive_lote(cursor, chunk, cum, cache_personas)
                 conn.commit()
                 current = min(i + len(chunk), total)
                 yield (

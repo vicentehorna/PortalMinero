@@ -190,6 +190,9 @@ def _stats_metadata_drive_vacio():
         "omitidos_largo": 0,
         "sin_id": 0,
         "ok": 0,
+        "internos_archivos": 0,
+        "internos_registros": 0,
+        "internos_sin_personas": 0,
     }
 
 
@@ -210,7 +213,169 @@ def _acumular_stats_metadata_drive(total, delta):
         total[k] += delta.get(k, 0)
 
 
-def procesar_un_item_metadata_drive(cursor, item):
+def _base_nombre_archivo_pdf(nombre_archivo):
+    nombre = str(nombre_archivo or "").strip()
+    base = nombre[:-4] if nombre.lower().endswith(".pdf") else nombre
+    return base.strip()
+
+
+def _parse_nombre_archivo_documento_drive(nombre_archivo):
+    """
+    Interpreta nombres PDF de Drive.
+
+    Personal: TIPO_PERIODO_DNI_Nombre.pdf
+    Interno:  INT_PERIODO_COMPANIA_NombreDocumento.pdf  (mismo PDF para todos los activos de la cía.)
+    """
+    base = _base_nombre_archivo_pdf(nombre_archivo)
+    if base.count("_") < 3:
+        return None
+    partes = base.split("_")
+    if len(partes) < 4:
+        return None
+
+    tipo = str(partes[0]).strip()
+    periodo = str(partes[1]).strip()
+    if not (tipo and periodo):
+        return None
+
+    if tipo.upper() == "INT":
+        company = str(partes[2]).strip()
+        nombre_documento = "_".join(
+            str(p).strip() for p in partes[3:] if str(p).strip()
+        ).strip()
+        if not (company and nombre_documento):
+            return None
+        return {
+            "modo": "interno",
+            "tipo": "INT",
+            "periodo": periodo,
+            "company": company,
+            "nombre_documento": nombre_documento,
+        }
+
+    dni = str(partes[2]).strip()
+    nombre_trabajador = " ".join(
+        str(p).strip() for p in partes[3:] if str(p).strip()
+    ).strip()
+    if not dni:
+        return None
+    return {
+        "modo": "personal",
+        "tipo": tipo,
+        "periodo": periodo,
+        "dni": dni,
+        "nombre_trabajador": nombre_trabajador,
+    }
+
+
+def get_personas_activas_compania(company):
+    """Personas activas (Status = N) vía sp_pr_selectorpersonas_web."""
+    cia = str(company or "").strip()
+    if not cia:
+        return []
+    conn = None
+    try:
+        conn = DatabaseConfig.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("EXEC sp_pr_selectorpersonas_web @cia=?", (cia,))
+        rows = cursor.fetchall()
+        cursor.close()
+        out = []
+        for row in rows:
+            person = str(row[0]).strip() if row[0] is not None else ""
+            name = str(row[1]).strip() if len(row) > 1 and row[1] is not None else person
+            if person:
+                out.append((person, name))
+        return out
+    except Exception as e:
+        print(f"Error en get_personas_activas_compania: {e}")
+        return []
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def _merge_documento_boleta_drive(
+    cursor, dni, periodo, tipo, nombre_trabajador, nombre_archivo, drive_id
+):
+    cursor.execute(
+        _MERGE_SQL_DOCUMENTOS_BOLETAS,
+        (dni, periodo, tipo, nombre_trabajador, nombre_archivo, drive_id),
+    )
+
+
+def procesar_un_item_documento_interno_drive(cursor, item, parsed, cache_personas):
+    """
+    Documento INT: replica metadata en DocumentosBoletas para cada trabajador activo de la cía.
+    """
+    delta = _stats_metadata_drive_vacio()
+    delta["procesados"] = 1
+
+    nombre_archivo = str((item or {}).get("name") or "").strip()
+    drive_id = str((item or {}).get("id") or "").strip()
+    if not drive_id:
+        delta["sin_id"] = 1
+        return delta
+
+    company = parsed["company"]
+    periodo = parsed["periodo"]
+    tipo = parsed["tipo"]
+    nombre_documento = parsed["nombre_documento"]
+
+    if cache_personas is not None:
+        if company not in cache_personas:
+            cache_personas[company] = get_personas_activas_compania(company)
+        personas = cache_personas[company]
+    else:
+        personas = get_personas_activas_compania(company)
+
+    if not personas:
+        delta["internos_sin_personas"] = 1
+        _logger_db.warning(
+            "Sync Drive INT: sin trabajadores activos para compañía %r (archivo %r)",
+            company,
+            nombre_archivo,
+        )
+        return delta
+
+    delta["internos_archivos"] = 1
+    merges_ok = 0
+    omitidos_largo = 0
+
+    for person, person_name in personas:
+        nombre_trabajador = nombre_documento or person_name
+        try:
+            _merge_documento_boleta_drive(
+                cursor,
+                person,
+                periodo,
+                tipo,
+                nombre_trabajador,
+                nombre_archivo,
+                drive_id,
+            )
+            merges_ok += 1
+        except pyodbc.DataError as e:
+            if _es_error_truncado_sql(e):
+                omitidos_largo += 1
+                _logger_db.warning(
+                    "Sync Drive INT: nombre demasiado largo (omitido persona %r): %r",
+                    person,
+                    nombre_archivo,
+                )
+                continue
+            raise
+
+    delta["ok"] = merges_ok
+    delta["internos_registros"] = merges_ok
+    delta["omitidos_largo"] = omitidos_largo
+    return delta
+
+
+def procesar_un_item_metadata_drive(cursor, item, cache_personas=None):
     """
     Un archivo de Drive contra DocumentosBoletas (un MERGE).
     Retorna deltas {procesados, omitidos_formato, sin_id, ok} (0/1 en cada clave relevante).
@@ -225,31 +390,34 @@ def procesar_un_item_metadata_drive(cursor, item):
         delta["sin_id"] = 1
         return delta
 
-    base = nombre_archivo[:-4] if nombre_archivo.lower().endswith(".pdf") else nombre_archivo
-    base = base.strip()
-    # TIPO_PERIODO_DNI_Nombre → al menos 3 guiones bajos (4 segmentos mínimo)
-    if base.count("_") < 3:
+    parsed = _parse_nombre_archivo_documento_drive(nombre_archivo)
+    if not parsed:
         delta["omitidos_formato"] = 1
         return delta
 
-    partes = base.split("_")
-    if len(partes) < 4:
-        delta["omitidos_formato"] = 1
-        return delta
+    if parsed["modo"] == "interno":
+        return procesar_un_item_documento_interno_drive(
+            cursor, item, parsed, cache_personas
+        )
 
-    tipo = str(partes[0]).strip()
-    periodo = str(partes[1]).strip()
-    dni = str(partes[2]).strip()
-    nombre_trabajador = " ".join(str(p).strip() for p in partes[3:] if str(p).strip()).strip()
+    tipo = parsed["tipo"]
+    periodo = parsed["periodo"]
+    dni = parsed["dni"]
+    nombre_trabajador = parsed["nombre_trabajador"]
 
     if not (tipo and periodo and dni):
         delta["omitidos_formato"] = 1
         return delta
 
     try:
-        cursor.execute(
-            _MERGE_SQL_DOCUMENTOS_BOLETAS,
-            (dni, periodo, tipo, nombre_trabajador, nombre_archivo, drive_id),
+        _merge_documento_boleta_drive(
+            cursor,
+            dni,
+            periodo,
+            tipo,
+            nombre_trabajador,
+            nombre_archivo,
+            drive_id,
         )
     except pyodbc.DataError as e:
         if _es_error_truncado_sql(e):
@@ -275,7 +443,8 @@ def sincronizar_metadata_drive(lista_archivos):
     Sincroniza metadata de archivos PDF de Google Drive contra dbo.DocumentosBoletas.
 
     Reglas:
-    - Nombre esperado: TIPO_PERIODO_DNI_Nombre.pdf (al menos 3 guiones bajos en el nombre base)
+    - Personal: TIPO_PERIODO_DNI_Nombre.pdf
+    - Interno (INT): INT_PERIODO_COMPANIA_NombreDocumento.pdf → un registro por trabajador activo de la cía.
     - Clave de negocio: (DNI, Periodo, TipoDocumento)
     - Si existe: actualiza DriveFileID / Nombre / NombreArchivoOriginal / FechaSincronizacion
     - Si no existe: inserta registro nuevo.
@@ -288,12 +457,13 @@ def sincronizar_metadata_drive(lista_archivos):
     """
     conn = None
     stats = _stats_metadata_drive_vacio()
+    cache_personas = {}
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
 
         for item in (lista_archivos or []):
-            d = procesar_un_item_metadata_drive(cursor, item)
+            d = procesar_un_item_metadata_drive(cursor, item, cache_personas)
             _acumular_stats_metadata_drive(stats, d)
 
         conn.commit()
@@ -315,14 +485,16 @@ def sincronizar_metadata_drive(lista_archivos):
                 pass
 
 
-def sincronizar_metadata_drive_lote(cursor, lista_archivos, stats_acumulado=None):
+def sincronizar_metadata_drive_lote(cursor, lista_archivos, stats_acumulado=None, cache_personas=None):
     """
     Procesa un subconjunto de archivos usando un cursor ya abierto (sin commit).
     Actualiza stats_acumulado si se pasa un dict mutable.
     """
+    if cache_personas is None:
+        cache_personas = {}
     stats = _stats_metadata_drive_vacio()
     for item in (lista_archivos or []):
-        d = procesar_un_item_metadata_drive(cursor, item)
+        d = procesar_un_item_metadata_drive(cursor, item, cache_personas)
         _acumular_stats_metadata_drive(stats, d)
         if stats_acumulado is not None:
             _acumular_stats_metadata_drive(stats_acumulado, d)

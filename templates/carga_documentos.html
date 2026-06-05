@@ -36,6 +36,22 @@
             Se incluyen PDF en <strong>subcarpetas</strong> (por ejemplo <code>BOLETA/2026</code>).
             La carpeta debe estar compartida con la <strong>service account</strong> de Render como Editor.
         </p>
+        <p class="small text-muted mb-2">
+            <strong>Documentos internos (compartidos por compañía):</strong>
+            nomenclatura <code>INT_Periodo_Compania_NombreDocumento.pdf</code>
+            (ej. <code>INT_202601_BGT_REGLAMENTOINTERNO.pdf</code>).
+            Se registran en <code>DocumentosBoletas</code> para <strong>cada trabajador activo</strong>
+            de la compañía indicada en el nombre del archivo.
+        </p>
+        <p class="mb-4">
+            <strong>Carpeta opcional de documentos internos</strong>
+            (<code>GOOGLE_DRIVE_FOLDER_DOCUMENTOS_INTERNOS</code> en Render):
+            {% if ruta_documentos_internos %}
+            <code class="user-select-all d-block mt-1">{{ ruta_documentos_internos }}</code>
+            {% else %}
+            <span class="d-block mt-1 text-muted small">No configurada (los INT en la carpeta principal también se procesan).</span>
+            {% endif %}
+        </p>
         <details class="small border rounded px-3 py-2 mb-4 bg-light">
             <summary class="fw-semibold text-secondary cursor-pointer">Si la sincronización se corta a mitad (miles de PDF)</summary>
             <p class="mb-2 mt-2 text-muted small">
@@ -162,6 +178,13 @@
                 '. Omitidos (formato): ' + (s.omitidos_formato || 0) +
                 '. Omitidos (nombre muy largo): ' + (s.omitidos_largo || 0) +
                 '. Sin ID: ' + (s.sin_id || 0) + '.';
+            if (s.internos_archivos) {
+                msg += ' Documentos internos (INT): ' + s.internos_archivos +
+                    ' archivo(s), ' + (s.internos_registros || 0) + ' registro(s) en trabajadores.';
+            }
+            if (s.internos_sin_personas) {
+                msg += ' INT sin trabajadores activos: ' + s.internos_sin_personas + '.';
+            }
             if (ren.detectados) {
                 msg += ' Renombrados FIN_DE_MES→BOL: ' + (ren.renombrados || 0) +
                     ' (detectados: ' + ren.detectados + ', fallidos en Drive: ' + (ren.fallidos || 0) + ').';
