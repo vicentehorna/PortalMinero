@@ -96,17 +96,22 @@
         background-color: #f8f9fa;
     }
 
-    /* Filtros reporte: empleado, DNI y tipo documento en la misma fila */
+    /* Filtros reporte documentos */
     .doc-filtro-empleado .form-select,
-    .doc-filtro-tipo-documento .form-select {
+    .doc-filtro-dni .form-control,
+    .doc-filtro-nombre .form-control {
         min-width: 0;
     }
-    @media (min-width: 992px) {
-        .doc-filtro-empleado .form-select {
-            min-width: 9.5rem;
-        }
-        .doc-filtro-tipo-documento .form-select {
-            min-width: 7.5rem;
+    .doc-filtro-periodo .form-select,
+    .doc-filtro-tipo-documento .form-select {
+        width: 8.5rem;
+        max-width: 100%;
+    }
+    @media (min-width: 768px) {
+        .doc-filtro-periodo,
+        .doc-filtro-tipo-documento {
+            flex: 0 0 auto;
+            width: auto;
         }
     }
     .doc-filtro-tipo-documento {
@@ -122,51 +127,61 @@
         <h5 class="mb-0 fw-bold text-secondary"><i class="bi bi-folder2-open"></i> Documentos del personal</h5>
     </div>
     <div class="card-body">
-        <form id="frmDocumentosPersonal" class="row g-2 g-lg-2 align-items-end">
-            <div class="col-12 col-lg-3">
-                <label for="cboCompania" class="form-label small fw-bold text-muted">Compañía</label>
-                <select id="cboCompania" class="form-select form-select-sm" required
-                    {% if minero_restringe_compania %}disabled title="Su perfil solo permite consultar su compañía"{% endif %}>
-                    {% if minero_restringe_compania %}
-                    <option value="{{ minero_compania_codigo }}" selected>{{ minero_compania_text }}</option>
-                    {% else %}
-                    <option value="">Seleccione...</option>
-                    {% endif %}
-                </select>
+        <form id="frmDocumentosPersonal">
+            <div class="row g-2 g-lg-2 align-items-end">
+                <div class="col-12 col-md-6 col-lg-3">
+                    <label for="cboCompania" class="form-label small fw-bold text-muted">Compañía</label>
+                    <select id="cboCompania" class="form-select form-select-sm" required
+                        {% if minero_restringe_compania %}disabled title="Su perfil solo permite consultar su compañía"{% endif %}>
+                        {% if minero_restringe_compania %}
+                        <option value="{{ minero_compania_codigo }}" selected>{{ minero_compania_text }}</option>
+                        {% else %}
+                        <option value="">Seleccione...</option>
+                        {% endif %}
+                    </select>
+                </div>
+                <div class="col-6 col-md-auto doc-filtro-periodo">
+                    <label for="cboPeriodo" class="form-label small fw-bold text-muted">Periodo</label>
+                    <select id="cboPeriodo" class="form-select form-select-sm" required disabled>
+                        <option value="">Seleccione compañía...</option>
+                    </select>
+                </div>
+                <div class="col-12 col-md col-lg doc-filtro-empleado">
+                    <label for="cboTrabajador" class="form-label small fw-bold text-muted">Empleado
+                        {% if not simple_restringe_trabajador %}<span class="fw-normal opacity-75">(opcional)</span>{% endif %}
+                    </label>
+                    <select id="cboTrabajador" class="form-select form-select-sm"
+                        {% if simple_restringe_trabajador %}disabled title="Su perfil solo permite consultar sus documentos"{% else %}disabled{% endif %}>
+                        {% if simple_restringe_trabajador %}
+                        <option value="{{ simple_trabajador_codigo }}" selected>{{ simple_trabajador_nombre }}</option>
+                        {% else %}
+                        <option value="">Todos (por defecto)</option>
+                        {% endif %}
+                    </select>
+                </div>
+                <div class="col-6 col-md-2 col-lg-2 doc-filtro-dni">
+                    <label for="txtDni" class="form-label small fw-bold text-muted">DNI <span class="fw-normal opacity-75">(opcional)</span></label>
+                    <input type="text" id="txtDni" class="form-control form-control-sm" placeholder="Buscar..." maxlength="20" autocomplete="off">
+                </div>
+                <div class="col-6 col-md-auto doc-filtro-tipo-documento">
+                    <label for="cboTipoDocumento" class="form-label small fw-bold text-muted">Tipo documento</label>
+                    <select id="cboTipoDocumento" class="form-select form-select-sm">
+                        <option value="0">Todos</option>
+                    </select>
+                </div>
             </div>
-            <div class="col-6 col-sm-4 col-lg-2">
-                <label for="cboPeriodo" class="form-label small fw-bold text-muted">Periodo</label>
-                <select id="cboPeriodo" class="form-select form-select-sm" required disabled>
-                    <option value="">Seleccione compañía...</option>
-                </select>
+            <div class="row g-2 align-items-end mt-1">
+                <div class="col-12 col-md-6 col-lg-3 doc-filtro-nombre">
+                    <label for="txtNombre" class="form-label small fw-bold text-muted">Nombre <span class="fw-normal opacity-75">(opcional)</span></label>
+                    <input type="text" id="txtNombre" class="form-control form-control-sm" placeholder="Buscar por nombre del empleado..." maxlength="100" autocomplete="off">
+                </div>
             </div>
-            <div class="col-12 col-sm-6 col-lg-3 doc-filtro-empleado">
-                <label for="cboTrabajador" class="form-label small fw-bold text-muted">Empleado
-                    {% if not simple_restringe_trabajador %}<span class="fw-normal opacity-75">(opcional)</span>{% endif %}
-                </label>
-                <select id="cboTrabajador" class="form-select form-select-sm"
-                    {% if simple_restringe_trabajador %}disabled title="Su perfil solo permite consultar sus documentos"{% else %}disabled{% endif %}>
-                    {% if simple_restringe_trabajador %}
-                    <option value="{{ simple_trabajador_codigo }}" selected>{{ simple_trabajador_nombre }}</option>
-                    {% else %}
-                    <option value="">Todos (por defecto)</option>
-                    {% endif %}
-                </select>
-            </div>
-            <div class="col-6 col-sm-4 col-lg-2 doc-filtro-dni">
-                <label for="txtDni" class="form-label small fw-bold text-muted">DNI <span class="fw-normal opacity-75">(opcional)</span></label>
-                <input type="text" id="txtDni" class="form-control form-control-sm" placeholder="Buscar..." maxlength="20" autocomplete="off">
-            </div>
-            <div class="col-6 col-sm-4 col-lg-2 doc-filtro-tipo-documento">
-                <label for="cboTipoDocumento" class="form-label small fw-bold text-muted">Tipo documento</label>
-                <select id="cboTipoDocumento" class="form-select form-select-sm">
-                    <option value="0">Todos</option>
-                </select>
-            </div>
+            <div class="row">
             <div class="col-12 d-flex align-items-center flex-wrap gap-2 border-top pt-3 mt-3">
                 <button type="submit" class="btn btn-primary btn-sm px-4"><i class="bi bi-search"></i> Consultar</button>
                 <button type="button" class="btn btn-success btn-sm px-4" id="btnExportExcelDocs" disabled><i class="bi bi-file-earmark-excel"></i> Exportar a Excel</button>
                 <span class="ms-auto text-muted small fw-bold">No. de Registros: <span id="lblRowCountDocs">0</span></span>
+            </div>
             </div>
         </form>
     </div>
@@ -190,8 +205,8 @@
 <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 <script>
 document.addEventListener('DOMContentLoaded', async function () {
-    const filtrosPersist = window.FiltrosPlanillasReportes && window.FiltrosPlanillasReportes.vacacionesDetalle
-        ? window.FiltrosPlanillasReportes.vacacionesDetalle()
+    const filtrosPersist = window.FiltrosPlanillasReportes && window.FiltrosPlanillasReportes.documentosPersonal
+        ? window.FiltrosPlanillasReportes.documentosPersonal()
         : null;
     const URL_REPORTE = {{ url_for('reporte_documentos_personal_post') | tojson }};
     const URL_DESCARGAR = {{ url_for('descargar_documento_personal') | tojson }};
@@ -202,7 +217,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     const IDX_STICKY_1 = 0;
     const IDX_STICKY_2 = 1;
     const IDX_CENTRO = new Set([2, 3, 4, 5]);
-    const COL_DESCARGAR = 5;
+    const COL_DESCARGAR = 6;
 
     let lastExportDocumentosPersonal = null;
 
@@ -358,7 +373,7 @@ document.addEventListener('DOMContentLoaded', async function () {
                 else if (index === IDX_STICKY_2) sticky = 'sticky-col-2 text-truncate';
                 let align = IDX_CENTRO.has(index) ? 'text-center' : '';
 
-                if (index === 5 && valor && typeof valor === 'object' && valor.drivefileid) {
+                if (index === COL_DESCARGAR && valor && typeof valor === 'object' && valor.drivefileid) {
                     const q = new URLSearchParams({
                         file_id: String(valor.drivefileid || ''),
                         person: String(valor.person || ''),
@@ -452,7 +467,7 @@ document.addEventListener('DOMContentLoaded', async function () {
         ws.addRow([]);
         rowIdx++;
 
-        const IDX_CENTRO_XL = new Set([2, 3, 4]);
+        const IDX_CENTRO_XL = new Set([2, 3, 4, 5]);
         const hRow = ws.addRow(headers);
         hRow.font = { bold: true };
         hRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
@@ -491,6 +506,7 @@ document.addEventListener('DOMContentLoaded', async function () {
         ws.getColumn(3).width = 16;
         ws.getColumn(4).width = 12;
         ws.getColumn(5).width = 20;
+        ws.getColumn(6).width = 20;
 
         const buffer = await wb.xlsx.writeBuffer();
         const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
@@ -562,6 +578,47 @@ document.addEventListener('DOMContentLoaded', async function () {
         }
     }
 
+    async function fetchPeriodoActivo(cia) {
+        try {
+            const res = await fetch(`/api/selectores/periodo-activo?cia=${encodeURIComponent(cia)}`);
+            const data = await res.json();
+            return String(data.prperiod || data.id || '').trim();
+        } catch (err) {
+            console.error(err);
+            return '';
+        }
+    }
+
+    function normalizarPeriodo(val) {
+        return String(val || '').replace(/\D/g, '').trim();
+    }
+
+    function buscarOptionPeriodo(selectElement, periodo) {
+        const want = normalizarPeriodo(periodo);
+        if (!want || !selectElement) return null;
+        return Array.from(selectElement.options).find((o) => normalizarPeriodo(o.value) === want) || null;
+    }
+
+    function agregarPeriodoSiFalta(selectElement, periodo) {
+        const p = String(periodo || '').trim();
+        if (!p || buscarOptionPeriodo(selectElement, p)) return;
+        const opt = document.createElement('option');
+        opt.value = p;
+        opt.textContent = p;
+        const ref = selectElement.options.length > 1 ? selectElement.options[1] : null;
+        if (ref) {
+            selectElement.insertBefore(opt, ref);
+        } else {
+            selectElement.appendChild(opt);
+        }
+    }
+
+    function resolverPeriodoPorDefecto(selectElement, periodoActivo) {
+        const opt = buscarOptionPeriodo(selectElement, periodoActivo);
+        if (opt) return opt.value;
+        return optionExists(selectElement, '0') ? '0' : '';
+    }
+
     async function poblarPeriodos(cia, selectElement) {
         selectElement.innerHTML = '';
         const loading = document.createElement('option');
@@ -569,7 +626,10 @@ document.addEventListener('DOMContentLoaded', async function () {
         loading.textContent = 'Cargando...';
         selectElement.appendChild(loading);
         try {
-            const res = await fetch(`/api/selectores/periodos-asig?cia=${encodeURIComponent(cia)}`);
+            const [res, periodoActivo] = await Promise.all([
+                fetch(`/api/selectores/periodos-asig?cia=${encodeURIComponent(cia)}`),
+                fetchPeriodoActivo(cia),
+            ]);
             const data = await res.json();
             selectElement.innerHTML = '';
             const optTodos = document.createElement('option');
@@ -582,7 +642,8 @@ document.addEventListener('DOMContentLoaded', async function () {
                 opt.textContent = item.text != null ? String(item.text) : '';
                 selectElement.appendChild(opt);
             });
-            selectElement.value = '0';
+            agregarPeriodoSiFalta(selectElement, periodoActivo);
+            selectElement.value = resolverPeriodoPorDefecto(selectElement, periodoActivo);
             selectElement.disabled = false;
         } catch (err) {
             console.error(err);
@@ -607,12 +668,13 @@ document.addEventListener('DOMContentLoaded', async function () {
         let tipodoc = document.getElementById('cboTipoDocumento').value.trim();
         if (!tipodoc) tipodoc = '0';
         const dni = document.getElementById('txtDni').value.trim();
+        const nombre = document.getElementById('txtNombre').value.trim();
 
         try {
             const res = await fetch(URL_REPORTE, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ cia, period, person, tipodoc, dni }),
+                body: JSON.stringify({ cia, period, person, tipodoc, dni, nombre }),
             });
             const payload = await res.json();
             if (!res.ok || payload.error) {
@@ -638,6 +700,7 @@ document.addEventListener('DOMContentLoaded', async function () {
                     tipoDocumento: selectedText('cboTipoDocumento'),
                     empleado: selectedText('cboTrabajador'),
                     dni: document.getElementById('txtDni').value.trim(),
+                    nombre: document.getElementById('txtNombre').value.trim(),
                 },
             };
             document.getElementById('btnExportExcelDocs').disabled = false;
@@ -652,35 +715,50 @@ document.addEventListener('DOMContentLoaded', async function () {
 
     const DEFAULT_CIA = 'BGT';
     const cboCia = document.getElementById('cboCompania');
+    const cboPeriodo = document.getElementById('cboPeriodo');
     const cboTrabajador = document.getElementById('cboTrabajador');
     const cboTipoDocumento = document.getElementById('cboTipoDocumento');
+    const guardadoObj = filtrosPersist ? filtrosPersist.leer() : null;
 
     await poblarTiposDocumento(cboTipoDocumento);
+    if (guardadoObj && guardadoObj.tipodoc != null) {
+        const td = String(guardadoObj.tipodoc).trim();
+        if (td && optionExists(cboTipoDocumento, td)) {
+            cboTipoDocumento.value = td;
+        }
+    }
 
     if (!RESTRINGE_COMPANIA) {
         await poblarSelect('/api/selectores/companias', cboCia);
         limpiarValorComboSiObsoleto(cboCia);
 
-        const guardadoObj = filtrosPersist ? filtrosPersist.leer() : null;
         const ciaGuardada = guardadoObj ? String(guardadoObj.cia || '').trim() : '';
-        if (filtrosPersist && ciaGuardada && !SIMPLE_RESTRINGE_TRABAJADOR) {
-            await filtrosPersist.aplicarRestauracionCascada({
-                poblarSelect,
-                poblarPeriodoVacaciones: poblarPeriodos,
-            });
-            etiquetaTrabajadorTodosPorDefecto(cboTrabajador);
+        if (ciaGuardada && optionExists(cboCia, ciaGuardada)) {
+            cboCia.value = ciaGuardada;
+        } else if (!String(cboCia.value || '').trim()) {
+            seleccionarCompaniaInsensitive(cboCia, DEFAULT_CIA);
         }
 
-        limpiarValorComboSiObsoleto(cboCia);
-        if (!String(cboCia.value || '').trim()) {
-            if (seleccionarCompaniaInsensitive(cboCia, DEFAULT_CIA)) {
-                const ciaNorm = cboCia.value.trim();
-                if (!SIMPLE_RESTRINGE_TRABAJADOR) {
-                    await poblarSelect(`/api/selectores/trabajadores?cia=${encodeURIComponent(ciaNorm)}`, cboTrabajador);
-                    etiquetaTrabajadorTodosPorDefecto(cboTrabajador);
+        const ciaNorm = cboCia.value.trim();
+        if (ciaNorm) {
+            if (!SIMPLE_RESTRINGE_TRABAJADOR) {
+                await poblarSelect(`/api/selectores/trabajadores?cia=${encodeURIComponent(ciaNorm)}`, cboTrabajador);
+                etiquetaTrabajadorTodosPorDefecto(cboTrabajador);
+                const person = guardadoObj && guardadoObj.person != null ? String(guardadoObj.person).trim() : '';
+                if (person && optionExists(cboTrabajador, person)) {
+                    cboTrabajador.value = person;
                 }
-                await poblarPeriodos(ciaNorm, document.getElementById('cboPeriodo'));
             }
+            await poblarPeriodos(ciaNorm, cboPeriodo);
+        }
+
+        const inpDni = document.getElementById('txtDni');
+        if (inpDni && guardadoObj && guardadoObj.dni != null) {
+            inpDni.value = String(guardadoObj.dni).trim();
+        }
+        const inpNombre = document.getElementById('txtNombre');
+        if (inpNombre && guardadoObj && guardadoObj.nombre != null) {
+            inpNombre.value = String(guardadoObj.nombre).trim();
         }
     } else {
         const ciaFix = String(COMPANIA_CODIGO || '').trim();
@@ -689,7 +767,7 @@ document.addEventListener('DOMContentLoaded', async function () {
                 await poblarSelect(`/api/selectores/trabajadores?cia=${encodeURIComponent(ciaFix)}`, cboTrabajador);
                 etiquetaTrabajadorTodosPorDefecto(cboTrabajador);
             }
-            await poblarPeriodos(ciaFix, document.getElementById('cboPeriodo'));
+            await poblarPeriodos(ciaFix, cboPeriodo);
         }
     }
 

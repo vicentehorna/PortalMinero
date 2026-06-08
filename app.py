@@ -392,14 +392,14 @@ def _tipodoc_web_por_codigo(codigo):
     return None
 
 
-def _documentos_personal_fetch_rows(cia, period, tipodoc, person, dni):
+def _documentos_personal_fetch_rows(cia, period, tipodoc, person, dni, nombre=''):
     conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute(
-            "EXEC sp_pr_reportenotificaciones_web @cia=?, @period=?, @tipodoc=?, @person=?, @dni=?",
-            (cia, period, tipodoc, person, dni),
+            "EXEC sp_pr_reportenotificaciones_web @cia=?, @period=?, @tipodoc=?, @person=?, @dni=?, @nombre=?",
+            (cia, period, tipodoc, person, dni, nombre),
         )
         return _dicts_first_nonempty_resultset(cursor)
     finally:
@@ -451,6 +451,7 @@ def _documentos_personal_build_payload(rows, cia, modo='completo'):
         'Nombre',
         'Tipo documento',
         'Periodo',
+        'Fecha sincronización',
         'Fecha descarga',
         'Descargar',
     ]
@@ -465,6 +466,7 @@ def _documentos_personal_build_payload(rows, cia, modo='completo'):
             _jsonable_value(r.get('name')),
             tipo_doc,
             periodo_doc,
+            _fmt_fecha_hora_dd_mm_yyyy_hh_mm(r.get('fechasincronizacion')),
             _fmt_fecha_hora_dd_mm_yyyy_hh_mm(r.get('fechadescarga')),
             {
                 'drivefileid': drive_id,
@@ -3039,6 +3041,41 @@ def api_periodos():
                 pass
 
 
+@app.route('/api/selectores/periodo-activo')
+@login_required
+def api_periodo_activo():
+    """sp_pr_selectorperiodoactivo_planilla_web @cia → prperiod (OBREROS/EMPLEADOS)."""
+    ensure_user_session()
+    lock = _documentos_effective_company_lock()
+    cia = str(request.args.get('cia') or '').strip()
+    if lock:
+        cia = lock
+    if not cia:
+        return jsonify({"prperiod": ""})
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "EXEC sp_pr_selectorperiodoactivo_planilla_web @cia=?",
+            (cia,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return jsonify({"prperiod": ""})
+        prperiod = str(row[0] or '').strip() if row[0] is not None else ''
+        return jsonify({"prperiod": prperiod})
+    except Exception:
+        logging.exception("api_periodo_activo")
+        return jsonify({"prperiod": ""}), 500
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 @app.route('/api/selectores/periodos-asig')
 @login_required
 def api_periodos_asig():
@@ -4046,7 +4083,7 @@ def reporte_vacaciones_detalle_post():
 @app.route('/reporte_documentos_personal', methods=['POST'])
 @login_required
 def reporte_documentos_personal_post():
-    """sp_pr_reportenotificaciones_web @cia, @period, @tipodoc, @person, @dni."""
+    """sp_pr_reportenotificaciones_web @cia, @period, @tipodoc, @person, @dni, @nombre."""
     ensure_user_session()
     lock_cia = _documentos_effective_company_lock()
     lock_person = _documentos_effective_person_lock()
@@ -4062,6 +4099,7 @@ def reporte_documentos_personal_post():
         person = lock_person
     tipodoc = str(body.get('tipodoc') or body.get('tipodocumento') or '0').strip() or '0'
     dni = str(body.get('dni') or '').strip()
+    nombre = str(body.get('nombre') or body.get('name') or '').strip()
     modo_simple = bool(session.get('simple_profile')) or str(body.get('modo') or '').strip().lower() == 'simple'
 
     if not cia:
@@ -4077,9 +4115,10 @@ def reporte_documentos_personal_post():
         period = '0'
         person = lock_person
         dni = ''
+        nombre = ''
 
     try:
-        rows = _documentos_personal_fetch_rows(cia, period, tipodoc, person, dni)
+        rows = _documentos_personal_fetch_rows(cia, period, tipodoc, person, dni, nombre)
         payload = _documentos_personal_build_payload(
             rows,
             cia,

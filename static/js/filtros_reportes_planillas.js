@@ -11,6 +11,7 @@
     const STORAGE_KEY_FICHA_TRABAJADORES = 'filtros_ficha_trabajadores';
     const STORAGE_KEY_DESCANSOS_MEDICOS_DETALLE = 'filtros_descansos_medicos_detalle';
     const STORAGE_KEY_SALDO_VACACIONES = 'filtros_saldo_vacaciones';
+    const STORAGE_KEY_DOCUMENTOS_PERSONAL = 'filtros_documentos_personal';
     const STORAGE_KEY_PROCESAR_PLANILLA = 'filtros_procesar_planilla';
 
     function val(id) {
@@ -217,6 +218,7 @@
                     periodo: val('cboPeriodo'),
                     person: val('cboTrabajador'),
                     dni: val('txtDni'),
+                    nombre: val('txtNombre'),
                     timestamp: Date.now()
                 };
                 localStorage.setItem(STORAGE_KEY_VACACIONES_DETALLE, JSON.stringify(estado));
@@ -282,17 +284,24 @@
                 inpDni.value = String(filtros.dni).trim();
             }
 
+            const inpNombre = document.getElementById('txtNombre');
+            if (inpNombre && filtros.nombre != null) {
+                inpNombre.value = String(filtros.nombre).trim();
+            }
+
             guardar();
             return true;
         }
 
         function registrarGuardadoEnCambio() {
-            ['cboCompania', 'cboPeriodo', 'cboTrabajador', 'txtDni'].forEach((id) => {
+            ['cboCompania', 'cboPeriodo', 'cboTrabajador', 'txtDni', 'txtNombre'].forEach((id) => {
                 const el = document.getElementById(id);
                 if (el) el.addEventListener('change', guardar);
             });
-            const inpDni = document.getElementById('txtDni');
-            if (inpDni) inpDni.addEventListener('input', guardar);
+            ['txtDni', 'txtNombre'].forEach((id) => {
+                const el = document.getElementById(id);
+                if (el) el.addEventListener('input', guardar);
+            });
         }
 
         return {
@@ -597,6 +606,57 @@
         };
     }
 
+    function crearPersistenciaDocumentosPersonal() {
+        function guardar() {
+            try {
+                const estado = {
+                    cia: val('cboCompania'),
+                    person: val('cboTrabajador'),
+                    tipodoc: val('cboTipoDocumento'),
+                    dni: val('txtDni'),
+                    nombre: val('txtNombre'),
+                    timestamp: Date.now()
+                };
+                localStorage.setItem(STORAGE_KEY_DOCUMENTOS_PERSONAL, JSON.stringify(estado));
+            } catch (e) {
+                console.warn('filtros documentos personal: no se pudo guardar', e);
+            }
+        }
+
+        function leer() {
+            try {
+                const raw = localStorage.getItem(STORAGE_KEY_DOCUMENTOS_PERSONAL);
+                if (!raw) return null;
+                const o = JSON.parse(raw);
+                if (!o || typeof o !== 'object') return null;
+                return o;
+            } catch (e) {
+                return null;
+            }
+        }
+
+        function registrarGuardadoEnCambio() {
+            ['cboCompania', 'cboTrabajador', 'cboTipoDocumento'].forEach((id) => {
+                const el = document.getElementById(id);
+                if (el) el.addEventListener('change', guardar);
+            });
+            ['txtDni', 'txtNombre'].forEach((id) => {
+                const el = document.getElementById(id);
+                if (el) {
+                    el.addEventListener('change', guardar);
+                    el.addEventListener('input', guardar);
+                }
+            });
+        }
+
+        return {
+            STORAGE_KEY: STORAGE_KEY_DOCUMENTOS_PERSONAL,
+            guardar,
+            leer,
+            registrarGuardadoEnCambio
+        };
+    }
+
     global.FiltrosPlanillasReportes = {
         STORAGE_KEY_RESUMEN_TOTAL,
         STORAGE_KEY_PROMEDIO_LIQ,
@@ -605,6 +665,7 @@
         STORAGE_KEY_APROBAR_VACACIONES,
         STORAGE_KEY_FICHA_TRABAJADORES,
         STORAGE_KEY_SALDO_VACACIONES,
+        STORAGE_KEY_DOCUMENTOS_PERSONAL,
         STORAGE_KEY_DESCANSOS_MEDICOS_DETALLE,
         STORAGE_KEY_PROCESAR_PLANILLA,
         /** Misma lógica que optionExists interno (valor y option.value con trim). */
@@ -629,6 +690,9 @@
         },
         saldoVacaciones: function () {
             return crearPersistenciaSaldoVacaciones();
+        },
+        documentosPersonal: function () {
+            return crearPersistenciaDocumentosPersonal();
         },
         descansosMedicosDetalle: function () {
             return crearPersistenciaDescansosMedicosDetalle();
