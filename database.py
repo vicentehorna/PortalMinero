@@ -776,6 +776,46 @@ class User(UserMixin):
         return cursor.fetchone() is not None
 
     @staticmethod
+    def _tiene_perfil_tareo(cursor, userid):
+        """True si el usuario tiene perfil TAREO (módulo tareo diario)."""
+        cursor.execute(
+            """
+            SELECT 1
+            FROM SY_User u
+            INNER JOIN SY_UserProfile up ON u.UserID = up.UserID
+                AND up.Profile = 'TAREO'
+            WHERE u.UserID = ?
+            """,
+            (userid,),
+        )
+        return cursor.fetchone() is not None
+
+    @staticmethod
+    def tiene_perfil_tareo(userid):
+        """Consulta perfil TAREO fuera de un cursor existente."""
+        try:
+            conn = DatabaseConfig.get_connection()
+            cursor = conn.cursor()
+            ok = User._tiene_perfil_tareo(cursor, userid)
+            cursor.close()
+            conn.close()
+            return ok
+        except Exception as e:
+            print(f"Error en tiene_perfil_tareo: {e}")
+            return False
+
+    @staticmethod
+    def _usa_login_general(cursor, userid):
+        """
+        Perfiles que ingresan vía SY_Person/SY_Company sin exigir PR_Employee activo.
+        Incluye GENERAL (admin) y TAREO (supervisor de tareo).
+        """
+        return (
+            User._tiene_perfil_general(cursor, userid)
+            or User._tiene_perfil_tareo(cursor, userid)
+        )
+
+    @staticmethod
     def get_simple_documentos_scope(userid):
         """
         Si el usuario tiene perfil SIMPLE, devuelve compañía, código de persona y nombre
@@ -889,9 +929,9 @@ class User(UserMixin):
         """
         Valida las credenciales del usuario contra la base de datos.
 
-        Si existe fila en SY_User + SY_UserProfile con Profile = 'GENERAL' para el UserID,
-        se valida con la consulta sin PR_Employee; en caso contrario se usa la consulta
-        original (empleado activo Status = 'N').
+        Si existe perfil GENERAL o TAREO para el UserID, se valida con la consulta
+        sin PR_Employee; en caso contrario se usa la consulta de empleado activo
+        (Status = 'N').
         """
         try:
             conn = DatabaseConfig.get_connection()
@@ -899,7 +939,7 @@ class User(UserMixin):
 
             print(f"DEBUG: Intentando login con usuario: '{username}'")
 
-            if User._tiene_perfil_general(cursor, username):
+            if User._usa_login_general(cursor, username):
                 cursor.execute(User._SQL_LOGIN_GENERAL, (username, password))
             else:
                 cursor.execute(User._SQL_LOGIN_EMPLEADO, (username, password))
@@ -929,7 +969,7 @@ class User(UserMixin):
             conn = DatabaseConfig.get_connection()
             cursor = conn.cursor()
 
-            if User._tiene_perfil_general(cursor, user_id):
+            if User._usa_login_general(cursor, user_id):
                 cursor.execute(User._SQL_USER_BY_ID_GENERAL, (user_id,))
             else:
                 cursor.execute(User._SQL_USER_BY_ID_EMPLEADO, (user_id,))
@@ -2389,4 +2429,211 @@ def get_listado_generar_boletas(company, payrolltype, processtype, period, perso
     except Exception as e:
         print(f"Error get_listado_generar_boletas: {e}")
         return []
+
+
+TAREO_CODIGOS_DEFAULT = [
+    ('8', 'Jornada laboral (8 h)', 1),
+    ('DL', 'Descanso laborado', 2),
+    ('V', 'Vacaciones', 3),
+    ('FR', 'Feriado recuperable', 4),
+    ('DM', 'Descanso médico', 5),
+    ('F', 'Falta injustificada', 6),
+    ('PT', 'Permiso con goce', 7),
+    ('LCG', 'Licencia sin goce', 8),
+    ('S', 'Suspensión', 9),
+]
+
+TAREO_MVP_TRABAJADORES_LIMIT = 10
+
+
+def _seed_tareo_codigos_company(cursor, company):
+    """Inserta catálogo por defecto si la compañía aún no tiene códigos."""
+    cia = str(company or '').strip()
+    if not cia:
+        return
+    cursor.execute(
+        "SELECT COUNT(1) FROM Tareo_Codigo WHERE Company = ?",
+        (cia,),
+    )
+    row = cursor.fetchone()
+    if row and int(row[0]) > 0:
+        return
+    for codigo, descripcion, orden in TAREO_CODIGOS_DEFAULT:
+        cursor.execute(
+            """
+            INSERT INTO Tareo_Codigo (Company, Codigo, Descripcion, Orden, Activo)
+            VALUES (?, ?, ?, ?, 1)
+            """,
+            (cia, codigo, descripcion, orden),
+        )
+
+
+def get_tareo_codigos(company):
+    """Catálogo de códigos de tareo activos por compañía."""
+    cia = str(company or '').strip()
+    if not cia:
+        return []
+    conn = None
+    try:
+        conn = DatabaseConfig.get_connection()
+        cursor = conn.cursor()
+        _seed_tareo_codigos_company(cursor, cia)
+        conn.commit()
+        cursor.execute(
+            """
+            SELECT Codigo, Descripcion, Orden
+            FROM Tareo_Codigo
+            WHERE Company = ? AND Activo = 1
+            ORDER BY Orden, Codigo
+            """,
+            (cia,),
+        )
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return [
+            {
+                'codigo': str(r[0]).strip(),
+                'descripcion': str(r[1]).strip(),
+                'orden': int(r[2]) if r[2] is not None else 0,
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        _logger_db.exception("get_tareo_codigos")
+        if conn:
+            try:
+                conn.rollback()
+                conn.close()
+            except Exception:
+                pass
+        return [
+            {'codigo': c, 'descripcion': d, 'orden': o}
+            for c, d, o in TAREO_CODIGOS_DEFAULT
+        ]
+
+
+def get_tareo_trabajadores_supervisor(company, limit=None):
+    """
+    Trabajadores a cargo del supervisor (MVP: primeros N del selector de personas).
+    """
+    cia = str(company or '').strip()
+    if not cia:
+        return []
+    lim = int(limit or TAREO_MVP_TRABAJADORES_LIMIT)
+    if lim <= 0:
+        lim = TAREO_MVP_TRABAJADORES_LIMIT
+    conn = None
+    try:
+        conn = DatabaseConfig.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("EXEC sp_pr_selectorpersonas_web @cia=?", (cia,))
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        data = []
+        for r in rows[:lim]:
+            person = str(getattr(r, 'Person', r[0])).strip()
+            name = str(getattr(r, 'Name', r[1])).strip()
+            if person:
+                data.append({'person': person, 'nombre': name or person})
+        return data
+    except Exception as e:
+        _logger_db.exception("get_tareo_trabajadores_supervisor")
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return []
+
+
+def get_tareo_diario_dia(company, fecha):
+    """Registros de tareo de un día: dict person -> codigo."""
+    cia = str(company or '').strip()
+    fecha_s = str(fecha or '').strip()
+    if not cia or not fecha_s:
+        return {}
+    conn = None
+    try:
+        conn = DatabaseConfig.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT Person, Codigo
+            FROM Tareo_Diario
+            WHERE Company = ? AND Fecha = ?
+            """,
+            (cia, fecha_s),
+        )
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return {str(r[0]).strip(): str(r[1]).strip() for r in rows if r[0]}
+    except Exception as e:
+        _logger_db.exception("get_tareo_diario_dia")
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return {}
+
+
+def guardar_tareo_diario(company, fecha, registros, supervisor_userid):
+    """
+    Guarda o actualiza códigos de tareo del día.
+    registros: lista de dict con keys person, codigo.
+    Retorna (ok: bool, mensaje: str, guardados: int).
+    """
+    cia = str(company or '').strip()
+    fecha_s = str(fecha or '').strip()
+    sup = str(supervisor_userid or '').strip()
+    if not cia or not fecha_s or not sup:
+        return False, 'Datos incompletos para guardar el tareo.', 0
+    if not registros:
+        return False, 'No hay registros para guardar.', 0
+
+    conn = None
+    guardados = 0
+    try:
+        conn = DatabaseConfig.get_connection()
+        cursor = conn.cursor()
+        for item in registros:
+            person = str((item or {}).get('person') or '').strip()
+            codigo = str((item or {}).get('codigo') or '').strip()
+            if not person or not codigo:
+                continue
+            cursor.execute(
+                """
+                MERGE Tareo_Diario AS t
+                USING (SELECT ? AS Company, ? AS Person, ? AS Fecha) AS s
+                ON t.Company = s.Company AND t.Person = s.Person AND t.Fecha = s.Fecha
+                WHEN MATCHED THEN
+                    UPDATE SET
+                        Codigo = ?,
+                        SupervisorUserID = ?,
+                        FechaModificacion = SYSUTCDATETIME()
+                WHEN NOT MATCHED THEN
+                    INSERT (Company, Person, Fecha, Codigo, SupervisorUserID)
+                    VALUES (?, ?, ?, ?, ?);
+                """,
+                (cia, person, fecha_s, codigo, sup, cia, person, fecha_s, codigo, sup),
+            )
+            guardados += 1
+        conn.commit()
+        cursor.close()
+        conn.close()
+        if guardados == 0:
+            return False, 'Ningún registro válido para guardar.', 0
+        return True, f'Se guardaron {guardados} registro(s).', guardados
+    except Exception as e:
+        _logger_db.exception("guardar_tareo_diario")
+        if conn:
+            try:
+                conn.rollback()
+                conn.close()
+            except Exception:
+                pass
+        return False, 'No se pudo guardar el tareo. Verifique que existan las tablas Tareo_Diario y Tareo_Codigo.', 0
 

@@ -71,6 +71,11 @@ from database import (
     consultar_saldo_vacaciones_solicitud,
     fecha_hoy_peru,
     get_max_dias_vacaciones,
+    get_tareo_codigos,
+    get_tareo_trabajadores_supervisor,
+    get_tareo_diario_dia,
+    guardar_tareo_diario,
+    TAREO_MVP_TRABAJADORES_LIMIT,
 )
 
 load_dotenv()
@@ -160,6 +165,7 @@ def ensure_user_session():
         'simple_profile': session.get('simple_profile'),
         'simple_lock_company': session.get('simple_lock_company'),
         'simple_lock_person': session.get('simple_lock_person'),
+        'tareo_profile': session.get('tareo_profile'),
     }
 
 
@@ -168,6 +174,19 @@ def _refresh_documentos_alcance_session():
     if not current_user.is_authenticated:
         return
     uid = str(current_user.get_id())
+
+    session['general_profile'] = False
+    session['tareo_profile'] = False
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        session['general_profile'] = User._tiene_perfil_general(cursor, current_user.id)
+        session['tareo_profile'] = User._tiene_perfil_tareo(cursor, current_user.id)
+        cursor.close()
+        conn.close()
+    except Exception:
+        logging.exception('_refresh_documentos_alcance_session perfiles portal')
+
     if session.get('documentos_alcance_uid') == uid:
         return
     session['documentos_alcance_uid'] = uid
@@ -177,16 +196,6 @@ def _refresh_documentos_alcance_session():
     session.pop('simple_lock_person', None)
     session.pop('simple_lock_person_name', None)
     session['simple_profile'] = False
-    session['general_profile'] = False
-
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        session['general_profile'] = User._tiene_perfil_general(cursor, current_user.id)
-        cursor.close()
-        conn.close()
-    except Exception:
-        logging.exception('_refresh_documentos_alcance_session general_profile')
 
     lock_minero = User.get_minero_lock_company(current_user.id)
     if lock_minero:
@@ -227,6 +236,20 @@ def _documentos_effective_person_lock():
     if session.get('simple_profile') and session.get('simple_lock_person'):
         return str(session['simple_lock_person']).strip()
     return None
+
+
+def _tareo_effective_company():
+    """Compañía del supervisor de tareo (MINERO bloqueada o compañía de sesión)."""
+    lock = _minero_effective_company_lock()
+    if lock:
+        return lock
+    return str(session.get('company') or '').strip()
+
+
+def _require_tareo_profile():
+    """True si el usuario tiene perfil TAREO."""
+    ensure_user_session()
+    return bool(session.get('tareo_profile'))
 
 
 def _descripcion_compania_selector(codigo):
@@ -485,6 +508,8 @@ def _url_inicio_portal():
         return url_for('dashboard')
     if session.get('general_profile'):
         return url_for('configuracion_usuario')
+    if session.get('tareo_profile'):
+        return url_for('tareo_diario_page')
     return url_for('reporte_documentos_personal_page')
 
 
@@ -543,9 +568,26 @@ def _preload_user_session():
 
 @app.context_processor
 def inject_now():
+    perfiles = {}
+    if has_request_context() and current_user.is_authenticated:
+        ensure_user_session()
+        perfiles = {
+            'general_profile': bool(session.get('general_profile')),
+            'minero_profile': bool(session.get('minero_profile')),
+            'simple_profile': bool(session.get('simple_profile')),
+            'tareo_profile': bool(session.get('tareo_profile')),
+        }
+    else:
+        perfiles = {
+            'general_profile': False,
+            'minero_profile': False,
+            'simple_profile': False,
+            'tareo_profile': False,
+        }
     return {
         'now': datetime.now(),
         'logo_empresa': _resolver_logo_empresa_url(),
+        **perfiles,
     }
 
 
@@ -1300,6 +1342,7 @@ def login_post():
     user = User.validate_user(request.form.get('username'), request.form.get('password'))
     if user:
         login_user(user)
+        session.pop('documentos_alcance_uid', None)
         ensure_user_session()
         return redirect(_url_inicio_portal())
     flash('Usuario o contraseña incorrectos.', 'error')
@@ -2462,6 +2505,108 @@ def reporte_ficha_trabajadores_page():
 @login_required
 def reporte_saldo_vacaciones_page():
     return render_template('reporte_saldo_vacaciones.html', **_reporte_filtros_perfil_template_context())
+
+
+@app.route('/tareo/diario')
+@login_required
+def tareo_diario_page():
+    ensure_user_session()
+    if not _require_tareo_profile():
+        flash('El tareo diario está disponible solo para usuarios con perfil TAREO.', 'warning')
+        return redirect(_url_inicio_portal())
+    hoy = fecha_hoy_peru().strftime('%Y-%m-%d')
+    return render_template(
+        'tareo_diario.html',
+        tareo_company=_tareo_effective_company(),
+        fecha_default=hoy,
+        trabajadores_limit=TAREO_MVP_TRABAJADORES_LIMIT,
+    )
+
+
+@app.route('/api/tareo/codigos')
+@login_required
+def api_tareo_codigos():
+    if not _require_tareo_profile():
+        return jsonify({'error': 'Sin acceso al módulo TAREO.'}), 403
+    cia = str(request.args.get('cia') or _tareo_effective_company()).strip()
+    if not cia:
+        return jsonify({'error': 'Compañía no definida.'}), 400
+    lock = _minero_effective_company_lock()
+    if lock and cia != lock:
+        return jsonify({'error': 'Compañía no permitida.'}), 403
+    return jsonify(get_tareo_codigos(cia))
+
+
+@app.route('/api/tareo/trabajadores')
+@login_required
+def api_tareo_trabajadores():
+    if not _require_tareo_profile():
+        return jsonify({'error': 'Sin acceso al módulo TAREO.'}), 403
+    cia = str(request.args.get('cia') or _tareo_effective_company()).strip()
+    if not cia:
+        return jsonify({'error': 'Compañía no definida.'}), 400
+    lock = _minero_effective_company_lock()
+    if lock and cia != lock:
+        return jsonify({'error': 'Compañía no permitida.'}), 403
+    limite = request.args.get('limit', TAREO_MVP_TRABAJADORES_LIMIT, type=int)
+    return jsonify(get_tareo_trabajadores_supervisor(cia, limit=limite))
+
+
+@app.route('/api/tareo/diario')
+@login_required
+def api_tareo_diario_get():
+    if not _require_tareo_profile():
+        return jsonify({'error': 'Sin acceso al módulo TAREO.'}), 403
+    cia = str(request.args.get('cia') or _tareo_effective_company()).strip()
+    fecha = str(request.args.get('fecha') or '').strip()
+    if not cia or not fecha:
+        return jsonify({'error': 'Compañía y fecha son obligatorias.'}), 400
+    lock = _minero_effective_company_lock()
+    if lock and cia != lock:
+        return jsonify({'error': 'Compañía no permitida.'}), 403
+    registros = get_tareo_diario_dia(cia, fecha)
+    return jsonify({'cia': cia, 'fecha': fecha, 'registros': registros})
+
+
+@app.route('/api/tareo/diario', methods=['POST'])
+@login_required
+def api_tareo_diario_post():
+    if not _require_tareo_profile():
+        return jsonify({'error': 'Sin acceso al módulo TAREO.'}), 403
+    body = request.get_json(silent=True) or {}
+    cia = str(body.get('cia') or _tareo_effective_company()).strip()
+    fecha = str(body.get('fecha') or '').strip()
+    registros_in = body.get('registros') or []
+    if not cia or not fecha:
+        return jsonify({'error': 'Compañía y fecha son obligatorias.'}), 400
+    lock = _minero_effective_company_lock()
+    if lock and cia != lock:
+        return jsonify({'error': 'Compañía no permitida.'}), 403
+    if not isinstance(registros_in, list):
+        return jsonify({'error': 'Formato de registros inválido.'}), 400
+
+    codigos_validos = {c['codigo'] for c in get_tareo_codigos(cia)}
+    trabajadores_ok = {
+        t['person'] for t in get_tareo_trabajadores_supervisor(cia)
+    }
+    registros = []
+    for item in registros_in:
+        if not isinstance(item, dict):
+            continue
+        person = str(item.get('person') or '').strip()
+        codigo = str(item.get('codigo') or '').strip()
+        if person not in trabajadores_ok:
+            continue
+        if codigo not in codigos_validos:
+            continue
+        registros.append({'person': person, 'codigo': codigo})
+
+    ok, mensaje, guardados = guardar_tareo_diario(
+        cia, fecha, registros, str(current_user.get_id())
+    )
+    if not ok:
+        return jsonify({'error': mensaje, 'guardados': guardados}), 400
+    return jsonify({'ok': True, 'mensaje': mensaje, 'guardados': guardados})
 
 
 @app.route('/solicitud-vacaciones', methods=['GET', 'POST'])

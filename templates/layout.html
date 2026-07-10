@@ -456,6 +456,19 @@
                     </li>
                     {% endif %}
 
+                    {% if tareo_profile %}
+                    <li class="py-0">
+                        <p class="sidebar-section-title text-uppercase fw-bold opacity-50">Tareo</p>
+                    </li>
+
+                    <li class="{{ 'active' if request.endpoint == 'tareo_diario_page' else '' }}">
+                        <a href="{{ url_for('tareo_diario_page') }}" class="sidebar-link" title="Tareo diario">
+                            <i class="bi bi-calendar2-check sidebar-icon" aria-hidden="true"></i>
+                            <span class="sidebar-link-text">Tareo diario</span>
+                        </a>
+                    </li>
+                    {% endif %}
+
                     <hr class="mx-3 opacity-25 mt-3 mb-2">
 
                     <li>
