@@ -779,13 +779,13 @@ def _fmt_periodo_yyyy_mm(val):
 
 def _fmt_fecha_hora_dd_mm_yyyy_hh_mm(val):
     """
-    Fecha y hora para columnas de reporte (p. ej. Fecha descarga): dd/mm/yyyy HH:MM.
+    Fecha y hora para columnas de reporte (p. ej. Fecha descarga): dd/mm/yyyy HH:MM:SS.
     Acepta datetime, date o cadenas típicas de SQL/pyodbc.
     """
     if val is None:
         return None
     if isinstance(val, datetime):
-        return val.strftime('%d/%m/%Y %H:%M')
+        return val.strftime('%d/%m/%Y %H:%M:%S')
     if isinstance(val, date):
         return val.strftime('%d/%m/%Y')
     s = str(val).strip()
@@ -797,12 +797,12 @@ def _fmt_fecha_hora_dd_mm_yyyy_hh_mm(val):
             dt = datetime.fromisoformat(norm)
             if dt.tzinfo is not None:
                 dt = dt.replace(tzinfo=None)
-            return dt.strftime('%d/%m/%Y %H:%M')
+            return dt.strftime('%d/%m/%Y %H:%M:%S')
     except Exception:
         pass
-    for fmt in ('%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%d %H:%M:%S'):
+    for fmt in ('%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M'):
         try:
-            return datetime.strptime(s[:26], fmt).strftime('%d/%m/%Y %H:%M')
+            return datetime.strptime(s[:26], fmt).strftime('%d/%m/%Y %H:%M:%S')
         except ValueError:
             continue
     try:
